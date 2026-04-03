@@ -1,0 +1,11 @@
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\bin\Debug\net10.0\APTM.Gate.Core.deps.json
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\bin\Debug\net10.0\APTM.Gate.Core.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\bin\Debug\net10.0\APTM.Gate.Core.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.AssemblyInfoInputs.cache
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.AssemblyInfo.cs
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.csproj.CoreCompileInputs.cache
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\refint\APTM.Gate.Core.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\APTM.Gate.Core.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Core\obj\Debug\net10.0\ref\APTM.Gate.Core.dll

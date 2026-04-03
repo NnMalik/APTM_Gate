@@ -1,0 +1,17 @@
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Workers.deps.json
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Workers.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Workers.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Core.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Infrastructure.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Core.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\bin\Release\net10.0\APTM.Gate.Infrastructure.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.csproj.AssemblyReference.cache
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.AssemblyInfoInputs.cache
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.AssemblyInfo.cs
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.csproj.CoreCompileInputs.cache
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gat.DC7FE8B4.Up2Date
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\refint\APTM.Gate.Workers.dll
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\APTM.Gate.Workers.pdb
+C:\Users\DeLL\source\repos\APTM_GATE\src\APTM.Gate.Workers\obj\Release\net10.0\ref\APTM.Gate.Workers.dll

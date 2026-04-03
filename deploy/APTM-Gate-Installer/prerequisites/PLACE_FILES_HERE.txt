@@ -1,0 +1,12 @@
+Place offline prerequisites here for NUC deployment without internet:
+
+Required:
+  - aspnetcore-runtime-10.0.x-linux-x64.tar.gz
+    Download from: https://dotnet.microsoft.com/download/dotnet/10.0
+
+Optional (script can install online if NUC has internet):
+  - postgresql-16 .deb packages
+    On an Ubuntu machine with internet, run:
+      apt-get download postgresql postgresql-16 postgresql-client-16 \
+        postgresql-common postgresql-client-common libpq5
+    Then copy the .deb files here.

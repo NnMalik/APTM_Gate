@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/APTM.Gate.Api/APTM.Gate.Api.csproj" />
+    <Project Path="src/APTM.Gate.Core/APTM.Gate.Core.csproj" />
+    <Project Path="src/APTM.Gate.Infrastructure/APTM.Gate.Infrastructure.csproj" />
+    <Project Path="src/APTM.Gate.Workers/APTM.Gate.Workers.csproj" />
+  </Folder>
+</Solution>
