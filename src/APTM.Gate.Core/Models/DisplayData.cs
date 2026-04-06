@@ -3,6 +3,8 @@ namespace APTM.Gate.Core.Models;
 public sealed class DisplayData
 {
     public string GateRole { get; set; } = default!;
+    public int? ActiveEventId { get; set; }
+    public string? ActiveEventName { get; set; }
     public string TestInstanceName { get; set; } = default!;
     public string ScheduledDate { get; set; } = default!;
     public int TotalCandidates { get; set; }

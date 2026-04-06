@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs -d '\\\\n' git rm --cached -q)",
+      "Bash(grep -vE '\\\\.\\(sh|txt|md|ps1\\)$')"
+    ]
+  }
+}

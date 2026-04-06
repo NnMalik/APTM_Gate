@@ -12,6 +12,8 @@ public class GateConfig
     public DateOnly ScheduledDate { get; set; }
     public int DataSnapshotVersion { get; set; }
     public int ClockOffsetMs { get; set; }
+    public int? ActiveEventId { get; set; }
+    public string? ActiveEventName { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;
 }

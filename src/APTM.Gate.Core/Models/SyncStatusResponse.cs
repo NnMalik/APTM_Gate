@@ -4,6 +4,8 @@ public sealed class SyncStatusResponse
 {
     public string DeviceCode { get; set; } = default!;
     public string GateRole { get; set; } = default!;
+    public int? ActiveEventId { get; set; }
+    public string? ActiveEventName { get; set; }
     public Guid TestInstanceId { get; set; }
     public int ProcessedEventCount { get; set; }
     public int ReceivedSyncDataCount { get; set; }

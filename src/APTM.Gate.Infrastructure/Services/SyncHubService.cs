@@ -81,6 +81,7 @@ public sealed class SyncHubService : ISyncHubService
                     CandidateId = pe.CandidateId,
                     TagEpc = pe.TagEPC,
                     EventType = pe.EventType,
+                    EventId = pe.EventId,
                     ReadTime = pe.ReadTime,
                     DurationSeconds = pe.DurationSeconds,
                     CheckpointSequence = pe.CheckpointSequence,
@@ -168,6 +169,8 @@ public sealed class SyncHubService : ISyncHubService
         {
             DeviceCode = gateConfig?.DeviceCode ?? "",
             GateRole = gateConfig?.GateRole ?? "unconfigured",
+            ActiveEventId = gateConfig?.ActiveEventId,
+            ActiveEventName = gateConfig?.ActiveEventName,
             TestInstanceId = gateConfig?.TestInstanceId ?? Guid.Empty,
             ProcessedEventCount = eventCount,
             ReceivedSyncDataCount = syncDataCount,

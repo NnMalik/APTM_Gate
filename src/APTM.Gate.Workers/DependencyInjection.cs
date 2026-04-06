@@ -13,6 +13,8 @@ public static class DependencyInjection
               .OfType<TcpReaderWorker>()
               .First());
         services.AddHostedService<BufferProcessorWorker>();
+        // WatchdogService disabled — healthcheck cron provides recovery instead
+        // services.AddHostedService<WatchdogService>();
         return services;
     }
 }

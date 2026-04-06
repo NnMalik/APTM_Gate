@@ -33,6 +33,7 @@ public static class DisplayEndpoints
             if (gateConfig is null)
                 return Results.Ok(new { gateRole = "unconfigured" });
 
+            var activeEventId = gateConfig.ActiveEventId;
             var totalCandidates = await db.Candidates.CountAsync(ct);
 
             // Get latest race start for active heat info
@@ -62,9 +63,10 @@ public static class DisplayEndpoints
                 };
             }
 
-            // Get finish reads for current heat
+            // Get finish reads for current event only
             var finishReads = await db.ProcessedEvents
                 .Where(pe => pe.EventType == "finish" && pe.IsFirstRead)
+                .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderBy(pe => pe.ReadTime)
                 .Join(db.Candidates,
                     pe => pe.CandidateId,
@@ -85,9 +87,10 @@ public static class DisplayEndpoints
             for (int i = 0; i < finishReads.Count; i++)
                 finishReads[i].Position = i + 1;
 
-            // Start/attendance reads from processed events (gate's own tag reads)
+            // Start/attendance reads for current event
             var startReads = await db.ProcessedEvents
                 .Where(pe => pe.EventType == "start_attendance" && pe.IsFirstRead)
+                .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderByDescending(pe => pe.ReadTime)
                 .Join(db.Candidates,
                     pe => pe.CandidateId,
@@ -111,6 +114,8 @@ public static class DisplayEndpoints
             var data = new DisplayData
             {
                 GateRole = gateConfig.GateRole,
+                ActiveEventId = gateConfig.ActiveEventId,
+                ActiveEventName = gateConfig.ActiveEventName,
                 TestInstanceName = gateConfig.TestInstanceName,
                 ScheduledDate = gateConfig.ScheduledDate.ToString("yyyy-MM-dd"),
                 TotalCandidates = totalCandidates,

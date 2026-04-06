@@ -60,10 +60,13 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 .FirstOrDefaultAsync(ct);
         }
 
-        // Preload existing first reads for dedup (First Read Rule)
+        // Preload existing first reads for dedup (First Read Rule — per candidate per event)
+        var activeEventId = gateConfig.ActiveEventId;
         var resolvedCandidateIds = tagMap.Values.Distinct().ToList();
         var existingReads = await _db.ProcessedEvents
-            .Where(pe => resolvedCandidateIds.Contains(pe.CandidateId) && pe.IsFirstRead)
+            .Where(pe => resolvedCandidateIds.Contains(pe.CandidateId)
+                      && pe.IsFirstRead
+                      && pe.EventId == activeEventId)
             .Select(pe => pe.CandidateId)
             .Distinct()
             .ToListAsync(ct);
@@ -104,6 +107,7 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 CandidateId = candidateId,
                 TagEPC = row.TagEPC,
                 EventType = eventType,
+                EventId = activeEventId,
                 ReadTime = row.ReadTime,
                 DurationSeconds = durationSeconds,
                 CheckpointSequence = gateConfig.CheckpointSequence,

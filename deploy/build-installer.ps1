@@ -5,7 +5,7 @@
 # ============================================================================
 
 param(
-    [string]$GateDeviceCode = "uhf-reader-01",
+    [string]$GateDeviceCode = "gate-01",
     [string]$AcceptedToken  = "Tab-01",
     [string]$ReaderHost     = "192.168.0.250",
     [int]$ReaderPort        = 27011,
@@ -100,12 +100,18 @@ Write-Host "       Kestrel Port    : $KestrelPort" -ForegroundColor Gray
 # ── Step 4: Copy setup script ────────────────────────────────────────────
 Write-Host "[4/5] Copying installer scripts..." -ForegroundColor Yellow
 Copy-Item (Join-Path $scriptDir "installer-template\setup.sh") (Join-Path $outDir "setup.sh") -Force
+Copy-Item (Join-Path $scriptDir "installer-template\healthcheck.sh") (Join-Path $outDir "healthcheck.sh") -Force
 Copy-Item (Join-Path $scriptDir "installer-template\README.txt") (Join-Path $outDir "README.txt") -Force -ErrorAction SilentlyContinue
 
-# Ensure setup.sh has unix line endings
-$setupContent = Get-Content (Join-Path $outDir "setup.sh") -Raw
-$setupContent = $setupContent -replace "`r`n", "`n"
-[System.IO.File]::WriteAllText((Join-Path $outDir "setup.sh"), $setupContent, [System.Text.UTF8Encoding]::new($false))
+# Ensure shell scripts have unix line endings (LF, not CRLF)
+foreach ($shFile in @("setup.sh", "healthcheck.sh")) {
+    $shPath = Join-Path $outDir $shFile
+    if (Test-Path $shPath) {
+        $content = Get-Content $shPath -Raw
+        $content = $content -replace "`r`n", "`n"
+        [System.IO.File]::WriteAllText($shPath, $content, [System.Text.UTF8Encoding]::new($false))
+    }
+}
 
 # ── Step 5: Create ZIP ───────────────────────────────────────────────────
 if (-not $SkipZip) {

@@ -20,6 +20,8 @@ public class GateConfigConfiguration : IEntityTypeConfiguration<GateConfig>
         builder.Property(x => x.ScheduledDate).HasColumnName("scheduled_date").IsRequired();
         builder.Property(x => x.DataSnapshotVersion).HasColumnName("data_snapshot_version").IsRequired();
         builder.Property(x => x.ClockOffsetMs).HasColumnName("clock_offset_ms").HasDefaultValue(0);
+        builder.Property(x => x.ActiveEventId).HasColumnName("active_event_id");
+        builder.Property(x => x.ActiveEventName).HasColumnName("active_event_name").HasMaxLength(200);
         builder.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true).IsRequired();
         builder.Property(x => x.ReceivedAt).HasColumnName("received_at").IsRequired();
     }

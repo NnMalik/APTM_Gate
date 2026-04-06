@@ -135,6 +135,10 @@ public sealed class GateConfigService : IGateConfigService
                 DeviceCode = _deviceCode,
                 GateRole = thisGate.GateType,
                 CheckpointSequence = thisGate.CheckpointSequence,
+                ActiveEventId = thisGate.EventId,
+                ActiveEventName = thisGate.EventId.HasValue
+                    ? config.Events.FirstOrDefault(e => e.EventId == thisGate.EventId.Value)?.EventName
+                    : null,
                 ScheduledDate = config.ScheduledDate,
                 DataSnapshotVersion = config.DataSnapshotVersion,
                 ClockOffsetMs = clockOffsetMs,

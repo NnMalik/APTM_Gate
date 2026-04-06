@@ -1,0 +1,18 @@
+# Build outputs
+bin/
+obj/
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Deploy — ignore everything except scripts/templates
+deploy/APTM-Gate-Installer.zip
+deploy/APTM-Gate-Installer/backend/
+deploy/APTM-Gate-Installer/config/
+deploy/APTM-Gate-Installer/prerequisites/

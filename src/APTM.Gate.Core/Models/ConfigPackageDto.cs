@@ -53,6 +53,7 @@ public class ConfigGateDto
     public string DeviceCode { get; set; } = default!;
     public string GateType { get; set; } = default!;
     public int? CheckpointSequence { get; set; }
+    public int? EventId { get; set; }
     [JsonPropertyName("wifiSSID")]
     public string? WifiSSID { get; set; }
     public string? WifiPassword { get; set; }

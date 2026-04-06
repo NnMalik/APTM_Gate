@@ -6,6 +6,7 @@ public sealed class ProcessedEventDto
     public Guid CandidateId { get; set; }
     public string TagEpc { get; set; } = default!;
     public string EventType { get; set; } = default!;
+    public int? EventId { get; set; }
     public DateTimeOffset ReadTime { get; set; }
     public decimal? DurationSeconds { get; set; }
     public int? CheckpointSequence { get; set; }

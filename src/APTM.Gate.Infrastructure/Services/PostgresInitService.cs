@@ -6,7 +6,11 @@ using Microsoft.Extensions.Logging;
 
 namespace APTM.Gate.Infrastructure.Services;
 
-public sealed class PostgresInitService : IHostedService
+/// <summary>
+/// Runs EF Core migrations and installs PostgreSQL NOTIFY triggers.
+/// Runs as a BackgroundService so it does NOT block Kestrel from starting.
+/// </summary>
+public sealed class PostgresInitService : BackgroundService
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<PostgresInitService> _logger;
@@ -17,24 +21,53 @@ public sealed class PostgresInitService : IHostedService
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<GateDbContext>();
+        // Small delay to let Kestrel bind the port first
+        await Task.Yield();
 
-        // Apply pending migrations
-        _logger.LogInformation("Applying pending EF Core migrations...");
-        await db.Database.MigrateAsync(ct);
-        _logger.LogInformation("Migrations applied.");
+        for (int attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                _logger.LogInformation("PostgresInitService: attempt {Attempt} — applying migrations...", attempt);
 
-        // Apply NOTIFY triggers
-        _logger.LogInformation("Applying PostgreSQL NOTIFY triggers...");
-        var sql = GetTriggerSql();
-        await db.Database.ExecuteSqlRawAsync(sql, ct);
-        _logger.LogInformation("NOTIFY triggers applied.");
+                using var scope = _sp.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<GateDbContext>();
+
+                // Test DB connection first
+                if (!await db.Database.CanConnectAsync(stoppingToken))
+                {
+                    _logger.LogWarning("PostgresInitService: cannot connect to database. Retrying in 5s...");
+                    await Task.Delay(5000, stoppingToken);
+                    continue;
+                }
+
+                // Apply pending migrations
+                await db.Database.MigrateAsync(stoppingToken);
+                _logger.LogInformation("PostgresInitService: migrations applied successfully");
+
+                // Apply NOTIFY triggers
+                var sql = GetTriggerSql();
+                await db.Database.ExecuteSqlRawAsync(sql, stoppingToken);
+                _logger.LogInformation("PostgresInitService: NOTIFY triggers applied");
+
+                return; // Success — exit
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "PostgresInitService: attempt {Attempt} failed", attempt);
+                if (attempt < 5)
+                    await Task.Delay(5000, stoppingToken);
+            }
+        }
+
+        _logger.LogError("PostgresInitService: all 5 attempts failed. App will run with limited functionality.");
     }
-
-    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 
     private static string GetTriggerSql()
     {
