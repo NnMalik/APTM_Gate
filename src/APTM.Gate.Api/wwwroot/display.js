@@ -51,6 +51,7 @@ const Display = (() => {
         // Test info
         setText('testName', data.testInstanceName || '--');
         setText('testDate', data.scheduledDate || '--');
+        setText('eventName', data.activeEventName || '--');
 
         // Stats
         setText('statTotal', data.totalCandidates ?? '--');

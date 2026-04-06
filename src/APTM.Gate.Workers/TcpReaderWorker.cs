@@ -31,6 +31,7 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
     // Status
     private volatile bool _isConnected;
+    private volatile bool _manualDisconnect;
     private DateTimeOffset? _lastReadAt;
     private string? _readerId;
     private string? _readerModel;
@@ -62,6 +63,13 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // If manually disconnected, wait until reconnect is requested
+            if (_manualDisconnect)
+            {
+                await Task.Delay(500, stoppingToken);
+                continue;
+            }
+
             try
             {
                 await ConnectAndReadAsync(stoppingToken);
@@ -73,8 +81,11 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             catch (Exception ex)
             {
                 _isConnected = false;
-                _logger.LogWarning(ex, "Reader connection lost. Reconnecting in {Delay}ms", _reconnectDelayMs);
-                await Task.Delay(_reconnectDelayMs, stoppingToken);
+                if (!_manualDisconnect)
+                {
+                    _logger.LogWarning(ex, "Reader connection lost. Reconnecting in {Delay}ms", _reconnectDelayMs);
+                    await Task.Delay(_reconnectDelayMs, stoppingToken);
+                }
             }
         }
 
@@ -462,5 +473,117 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             return $"Antenna {port + 1}: Healthy (RL: {returnLoss}dB)";
         }
         return $"Antenna {port + 1}: Check Failed";
+    }
+
+    // --- Ported from old UHFReaderService ---
+
+    public async Task<(string Version, byte Type, byte Power)?> GetReaderInfoAsync(CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x21, ReadOnlySpan<byte>.Empty);
+        var resp = await SendCommandAsync(cmd, ct);
+        if (resp is { Length: >= 8 } && resp[3] == 0x00)
+        {
+            var version = $"{resp[4]}.{resp[5]}";
+            return (version, resp[6], resp[7]);
+        }
+        return null;
+    }
+
+    public async Task<bool> SetModeAsync(byte mode, CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x76, [mode]);
+        var resp = await SendCommandAsync(cmd, ct);
+        return resp is { Length: >= 4 } && resp[3] == 0x00;
+    }
+
+    public async Task<byte[]?> GetAntennaPowersAsync(CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x94, ReadOnlySpan<byte>.Empty);
+        var resp = await SendCommandAsync(cmd, ct);
+        if (resp is { Length: >= 5 } && resp[3] == 0x00)
+        {
+            // Power data starts at index 4, each byte is power for one antenna
+            var powerCount = resp[0] - 4; // Len - (Adr + reCmd + Status + CRC(2)) + 1
+            if (powerCount <= 0) return null;
+            var powers = new byte[powerCount];
+            Array.Copy(resp, 4, powers, 0, powerCount);
+            return powers;
+        }
+        return null;
+    }
+
+    public async Task<bool> ControlBuzzerAsync(byte activeDuration, byte silentDuration, byte times, CancellationToken ct = default)
+    {
+        byte[] data = [activeDuration, silentDuration, times];
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x33, data);
+        var resp = await SendCommandAsync(cmd, ct);
+        return resp is { Length: >= 4 } && resp[3] == 0x00;
+    }
+
+    public async Task<bool> SetEpcFilterAsync(byte bits, CancellationToken ct = default)
+    {
+        // Sel=0x01 (EPC bank), Address=0x0020 (32 bits = start of EPC), MaskLen=bits, Trun=0x00
+        byte[] data = [0x01, 0x00, 0x20, bits, 0x00];
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x2C, data);
+        var resp = await SendCommandAsync(cmd, ct);
+        return resp is { Length: >= 4 } && resp[3] == 0x00;
+    }
+
+    public async Task<bool> DisableFilterAsync(CancellationToken ct = default)
+    {
+        // Sel=0x01, Address=0x0020, MaskLen=0x00, Trun=0x00
+        byte[] data = [0x01, 0x00, 0x20, 0x00, 0x00];
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x2C, data);
+        var resp = await SendCommandAsync(cmd, ct);
+        return resp is { Length: >= 4 } && resp[3] == 0x00;
+    }
+
+    public async Task<bool> SetDuplicateFilterTimeAsync(byte value, CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x3D, [value]);
+        var resp = await SendCommandAsync(cmd, ct);
+        return resp is { Length: >= 4 } && resp[3] == 0x00;
+    }
+
+    public async Task<byte?> GetDuplicateFilterTimeAsync(CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x3E, ReadOnlySpan<byte>.Empty);
+        var resp = await SendCommandAsync(cmd, ct);
+        if (resp is { Length: >= 5 } && resp[3] == 0x00)
+            return resp[4];
+        return null;
+    }
+
+    public async Task<(int ConnectedCount, byte AntennaBitmask)?> GetAntennaConfigAsync(CancellationToken ct = default)
+    {
+        var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x21, ReadOnlySpan<byte>.Empty);
+        var resp = await SendCommandAsync(cmd, ct);
+        if (resp is { Length: >= 12 } && resp[3] == 0x00)
+        {
+            byte antByte = resp[11];
+            int count = 0;
+            for (int i = 0; i < 4; i++)
+                if ((antByte & (1 << i)) != 0) count++;
+            return (count, antByte);
+        }
+        return null;
+    }
+
+    // Connection control
+
+    public Task<bool> DisconnectReaderAsync(CancellationToken ct = default)
+    {
+        _manualDisconnect = true;
+        _isConnected = false;
+        DisposeConnection();
+        _logger.LogInformation("Reader manually disconnected");
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> ReconnectReaderAsync(CancellationToken ct = default)
+    {
+        _manualDisconnect = false;
+        _logger.LogInformation("Reader reconnect requested — will connect on next cycle");
+        return Task.FromResult(true);
     }
 }
