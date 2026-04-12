@@ -53,6 +53,13 @@ const Display = (() => {
         setText('testDate', data.scheduledDate || '--');
         setText('eventName', data.activeEventName || '--');
 
+        // Reader connection status
+        const readerEl = document.getElementById('readerStatus');
+        if (readerEl) {
+            readerEl.textContent = data.readerConnected ? 'Reader: Connected' : 'Reader: Disconnected';
+            readerEl.className = 'reader-status ' + (data.readerConnected ? 'connected' : 'disconnected');
+        }
+
         // Stats
         setText('statTotal', data.totalCandidates ?? '--');
         if (data.attendance) {
@@ -80,6 +87,7 @@ const Display = (() => {
     function applyHeat(heat) {
         state.gunStartTime = heat.gunStartTime ? new Date(heat.gunStartTime) : null;
         setText('heatNumber', heat.heatNumber ?? '--');
+        setText('statHeat', heat.heatNumber ?? '--');
 
         const timerCard = document.getElementById('heatCard');
         if (timerCard) timerCard.style.display = 'block';
@@ -200,7 +208,7 @@ const Display = (() => {
         const dot = document.getElementById('sseDot');
         const label = document.getElementById('sseLabel');
         if (dot) dot.classList.toggle('connected', connected);
-        if (label) label.textContent = connected ? 'Live' : 'Reconnecting...';
+        if (label) label.textContent = connected ? 'Connected' : 'Reconnecting...';
 
         // On reconnect, re-fetch full state
         if (connected) loadDisplayData();

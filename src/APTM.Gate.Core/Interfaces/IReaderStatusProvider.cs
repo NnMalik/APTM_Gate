@@ -7,6 +7,7 @@ public interface IReaderStatusProvider
     string? ReaderModel { get; }
     string? FirmwareVersion { get; }
     string? ReaderId { get; }
+    int AntennaCount { get; }  // 4 or 8, auto-detected from reader type
 
     Task<bool> SetPowerAsync(byte power, CancellationToken ct = default);
     Task<bool> ResetReaderAsync(CancellationToken ct = default);

@@ -102,6 +102,10 @@ body {
 }
 .connection-dot.connected { background: var(--green); }
 
+.reader-status { font-size: 0.75rem; }
+.reader-status.connected { color: var(--green); }
+.reader-status.disconnected { color: var(--red); }
+
 /* ── Stats Bar ──────────────────────────────────────────────────────────── */
 .stats-bar {
     display: flex;

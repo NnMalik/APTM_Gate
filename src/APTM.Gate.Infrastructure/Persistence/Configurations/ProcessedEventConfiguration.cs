@@ -18,6 +18,7 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.Property(x => x.ReadTime).HasColumnName("read_time").IsRequired();
         builder.Property(x => x.DurationSeconds).HasColumnName("duration_seconds").HasPrecision(10, 3);
         builder.Property(x => x.CheckpointSequence).HasColumnName("checkpoint_sequence");
+        builder.Property(x => x.HeatNumber).HasColumnName("heat_number");
         builder.Property(x => x.IsFirstRead).HasColumnName("is_first_read").HasDefaultValue(true).IsRequired();
         builder.Property(x => x.RawBufferId).HasColumnName("raw_buffer_id");
         builder.Property(x => x.ProcessedAt).HasColumnName("processed_at").IsRequired();

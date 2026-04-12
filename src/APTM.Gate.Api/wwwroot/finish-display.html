@@ -27,6 +27,7 @@
                 <span class="connection-dot" id="sseDot"></span>
                 <span id="sseLabel">Connecting...</span>
             </div>
+            <div id="readerStatus" class="reader-status disconnected" style="font-size: 0.75rem; margin-top: 2px;">Reader: --</div>
         </div>
     </div>
 
@@ -121,9 +122,16 @@
         // ── Finish Display Logic ───────────────────────────────────────────
         let finisherCount = 0;
         const finisherRows = []; // Track all rows for recalculation
+        const seenCandidateIds = new Set(); // Dedup across reload + SSE
 
         // Called by display.js when initial finish reads are loaded
         function onFinishReadsLoaded(reads) {
+            // Clear table and dedup set on reload
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+            finisherCount = 0;
+            finisherRows.length = 0;
+            seenCandidateIds.clear();
             reads.forEach(r => addFinisherRow(r, false));
         }
 
@@ -134,6 +142,7 @@
                     candidateId: data.candidate_id,
                     name: data.name,
                     jacketNumber: data.jacket_number,
+                    tagEPC: data.tag_epc,
                     readTime: data.read_time,
                     elapsedSeconds: data.duration_seconds,
                 }, true);
@@ -156,6 +165,11 @@
         }
 
         function addFinisherRow(read, animate) {
+            // Dedup by candidateId
+            const cid = read.candidateId;
+            if (cid && seenCandidateIds.has(cid)) return;
+            if (cid) seenCandidateIds.add(cid);
+
             const tbody = document.getElementById('resultsBody');
             finisherCount++;
 
@@ -166,13 +180,18 @@
             const readTime = read.readTime ? new Date(read.readTime) : null;
             const hasStartTime = Display.state.gunStartTime != null;
 
+            // Jacket: prefer jacketNumber, fall back to tag EPC
+            const jacket = read.jacketNumber ?? read.tagEPC ?? '--';
+
             // Compute elapsed
             let elapsedStr = '--';
-            if (read.elapsedSeconds != null) {
+            if (read.elapsedSeconds != null && read.elapsedSeconds < 86400) {
                 elapsedStr = Display.formatDuration(read.elapsedSeconds);
             } else if (hasStartTime && readTime) {
                 const elapsed = (readTime.getTime() - Display.state.gunStartTime.getTime()) / 1000;
-                elapsedStr = Display.formatDuration(elapsed);
+                if (elapsed > 0 && elapsed < 86400) {
+                    elapsedStr = Display.formatDuration(elapsed);
+                }
             }
 
             const finishTimeStr = readTime
@@ -185,7 +204,7 @@
 
             tr.innerHTML =
                 `<td class="col-pos">${pos}</td>` +
-                `<td class="col-jacket"><span>${read.jacketNumber ?? '--'}</span></td>` +
+                `<td class="col-jacket"><span>${jacket}</span></td>` +
                 `<td>${read.name || read.candidateId?.substring(0, 8) || '--'}</td>` +
                 `<td class="col-time col-elapsed">${elapsedStr}</td>` +
                 `<td>${finishTimeStr}</td>`;

@@ -10,6 +10,7 @@ public class ProcessedEvent
     public DateTimeOffset ReadTime { get; set; }
     public decimal? DurationSeconds { get; set; }
     public int? CheckpointSequence { get; set; }
+    public int? HeatNumber { get; set; }
     public bool IsFirstRead { get; set; } = true;
     public long? RawBufferId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; } = DateTimeOffset.UtcNow;

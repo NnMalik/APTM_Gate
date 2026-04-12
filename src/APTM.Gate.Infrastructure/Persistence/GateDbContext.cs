@@ -19,6 +19,7 @@ public class GateDbContext : DbContext
     public DbSet<ScoringTypeEntity> ScoringTypes => Set<ScoringTypeEntity>();
     public DbSet<ScoringStatusEntity> ScoringStatuses => Set<ScoringStatusEntity>();
     public DbSet<TestEventEntity> TestEvents => Set<TestEventEntity>();
+    public DbSet<AcceptedTokenEntity> AcceptedTokens => Set<AcceptedTokenEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

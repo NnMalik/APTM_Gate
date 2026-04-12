@@ -20,6 +20,7 @@ public static class ReaderEndpoints
                 reader.ReaderId,
                 reader.ReaderModel,
                 reader.FirmwareVersion,
+                reader.AntennaCount,
                 LastReadAt = reader.LastReadAt?.ToString("o")
             });
         })
@@ -51,14 +52,14 @@ public static class ReaderEndpoints
 
         group.MapGet("/antenna-check/{port:int}", async (int port, IReaderStatusProvider reader, CancellationToken ct) =>
         {
-            if (port < 0 || port > 3)
-                return Results.BadRequest("Port must be between 0 and 3");
+            if (port < 0 || port > 7)
+                return Results.BadRequest("Port must be between 0 and 7");
 
             string result = await reader.CheckAntennaHealthAsync((byte)port, ct);
             return Results.Ok(new { Result = result });
         })
         .WithName("CheckAntenna")
-        .WithSummary("Check antenna health by port (0-3)");
+        .WithSummary("Check antenna health by port (0-7)");
 
         // --- New endpoints (ported from old UHFReaderService) ---
 
@@ -203,13 +204,16 @@ public static class ReaderEndpoints
 
         group.MapPost("/connect", async (IReaderStatusProvider reader, CancellationToken ct) =>
         {
-            bool success = await reader.ReconnectReaderAsync(ct);
-            return success
-                ? Results.Ok(new { Message = "Reconnect requested. Reader will connect shortly." })
-                : Results.StatusCode(502);
+            if (reader.IsConnected)
+                return Results.Ok(new { Message = "Reader already connected", Connected = true });
+
+            bool connected = await reader.ReconnectReaderAsync(ct);
+            return connected
+                ? Results.Ok(new { Message = "Reader connected successfully", Connected = true })
+                : Results.Ok(new { Message = "Reader did not connect. Check reader power and network.", Connected = false });
         })
         .WithName("ConnectReader")
-        .WithSummary("Request reconnection to the UHF reader");
+        .WithSummary("Connect to the UHF reader (waits up to 10s for connection)");
     }
 }
 

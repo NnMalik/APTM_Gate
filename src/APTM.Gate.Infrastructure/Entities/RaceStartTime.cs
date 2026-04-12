@@ -8,5 +8,6 @@ public class RaceStartTime
     public DateTimeOffset GunStartTime { get; set; }
     public Guid SourceDeviceId { get; set; }
     public Guid[] CandidateIds { get; set; } = [];
+    public int SourceClockOffsetMs { get; set; }
     public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;
 }

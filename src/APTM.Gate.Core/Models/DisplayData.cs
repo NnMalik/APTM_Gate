@@ -3,6 +3,7 @@ namespace APTM.Gate.Core.Models;
 public sealed class DisplayData
 {
     public string GateRole { get; set; } = default!;
+    public bool ReaderConnected { get; set; }
     public int? ActiveEventId { get; set; }
     public string? ActiveEventName { get; set; }
     public string TestInstanceName { get; set; } = default!;
@@ -44,6 +45,7 @@ public sealed class FinishReadData
     public Guid CandidateId { get; set; }
     public string Name { get; set; } = default!;
     public int? JacketNumber { get; set; }
+    public string? TagEPC { get; set; }
     public DateTimeOffset ReadTime { get; set; }
     public decimal? ElapsedSeconds { get; set; }
     public int? HeatNumber { get; set; }

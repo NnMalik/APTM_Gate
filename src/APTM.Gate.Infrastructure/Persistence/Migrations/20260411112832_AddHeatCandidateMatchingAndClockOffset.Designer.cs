@@ -4,6 +4,7 @@ using System.Text.Json;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace APTM.Gate.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(GateDbContext))]
-    partial class GateDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260411112832_AddHeatCandidateMatchingAndClockOffset")]
+    partial class AddHeatCandidateMatchingAndClockOffset
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -22,38 +25,6 @@ namespace APTM.Gate.Infrastructure.Persistence.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("APTM.Gate.Infrastructure.Entities.AcceptedTokenEntity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Label")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("label");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("token");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Token")
-                        .IsUnique()
-                        .HasDatabaseName("idx_accepted_tokens_token");
-
-                    b.ToTable("accepted_tokens", (string)null);
-                });
 
             modelBuilder.Entity("APTM.Gate.Infrastructure.Entities.CandidateEntity", b =>
                 {
@@ -237,8 +208,7 @@ namespace APTM.Gate.Infrastructure.Persistence.Migrations
                         .HasColumnName("event_type");
 
                     b.Property<int?>("HeatNumber")
-                        .HasColumnType("integer")
-                        .HasColumnName("heat_number");
+                        .HasColumnType("integer");
 
                     b.Property<bool>("IsFirstRead")
                         .ValueGeneratedOnAdd()
@@ -310,10 +280,7 @@ namespace APTM.Gate.Infrastructure.Persistence.Migrations
                         .HasColumnName("received_at");
 
                     b.Property<int>("SourceClockOffsetMs")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0)
-                        .HasColumnName("source_clock_offset_ms");
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("SourceDeviceId")
                         .HasColumnType("uuid")

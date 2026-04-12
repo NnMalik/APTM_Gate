@@ -51,22 +51,32 @@ public sealed class BufferProcessingService : IBufferProcessingService
             _ => "unknown"
         };
 
-        // For finish gates, load the latest race start time for duration calculation
-        RaceStartTime? latestRaceStart = null;
+        // For finish gates, load all race start times for heat-candidate matching.
+        // Scoped to starts received after current config was applied (prevents using
+        // a gun start from a previous event when events are switched).
+        List<RaceStartTime> raceStarts = [];
         if (eventType == "finish")
         {
-            latestRaceStart = await _db.RaceStartTimes
+            raceStarts = await _db.RaceStartTimes
+                .Where(r => r.ReceivedAt >= gateConfig.ReceivedAt)
                 .OrderByDescending(r => r.ReceivedAt)
-                .FirstOrDefaultAsync(ct);
+                .ToListAsync(ct);
         }
 
         // Preload existing first reads for dedup (First Read Rule — per candidate per event)
         var activeEventId = gateConfig.ActiveEventId;
         var resolvedCandidateIds = tagMap.Values.Distinct().ToList();
-        var existingReads = await _db.ProcessedEvents
-            .Where(pe => resolvedCandidateIds.Contains(pe.CandidateId)
-                      && pe.IsFirstRead
-                      && pe.EventId == activeEventId)
+
+        // Build dedup query — handle NULL activeEventId explicitly because
+        // EF parameterises the value and SQL "column = NULL" is always false.
+        var dedupQuery = _db.ProcessedEvents
+            .Where(pe => resolvedCandidateIds.Contains(pe.CandidateId) && pe.IsFirstRead);
+
+        dedupQuery = activeEventId.HasValue
+            ? dedupQuery.Where(pe => pe.EventId == activeEventId.Value)
+            : dedupQuery.Where(pe => pe.EventId == null);
+
+        var existingReads = await dedupQuery
             .Select(pe => pe.CandidateId)
             .Distinct()
             .ToListAsync(ct);
@@ -94,12 +104,27 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 continue;
             }
 
-            // Compute duration for finish gates
+            // Compute duration for finish gates with heat-candidate matching
             decimal? durationSeconds = null;
-            if (eventType == "finish" && latestRaceStart is not null)
+            int? heatNumber = null;
+            if (eventType == "finish" && raceStarts.Count > 0)
             {
-                var elapsed = row.ReadTime - latestRaceStart.GunStartTime;
-                durationSeconds = (decimal)elapsed.TotalSeconds;
+                // Match candidate to their specific heat, fall back to latest start
+                var raceStart = raceStarts
+                    .FirstOrDefault(r => r.CandidateIds is not null && r.CandidateIds.Contains(candidateId))
+                    ?? raceStarts[0];
+
+                // Adjust for clock drift between HHT and gate:
+                // Both offsets are "server_time - local_time" in ms.
+                // Convert HHT-local gun start to gate-local time frame.
+                // Guard: skip adjustment if offset is unreasonable (> 24h = device never synced).
+                var offsetDiffMs = (long)gateConfig.ClockOffsetMs - raceStart.SourceClockOffsetMs;
+                var adjustedGunStart = Math.Abs(offsetDiffMs) <= 86_400_000
+                    ? raceStart.GunStartTime.AddMilliseconds(offsetDiffMs)
+                    : raceStart.GunStartTime;
+                var elapsed = row.ReadTime - adjustedGunStart;
+                durationSeconds = elapsed.TotalSeconds > 0 ? (decimal)elapsed.TotalSeconds : 0m;
+                heatNumber = raceStart.HeatNumber;
             }
 
             var processedEvent = new ProcessedEvent
@@ -110,6 +135,7 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 EventId = activeEventId,
                 ReadTime = row.ReadTime,
                 DurationSeconds = durationSeconds,
+                HeatNumber = heatNumber,
                 CheckpointSequence = gateConfig.CheckpointSequence,
                 IsFirstRead = true,
                 RawBufferId = row.Id,

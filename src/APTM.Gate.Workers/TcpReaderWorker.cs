@@ -36,12 +36,14 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     private string? _readerId;
     private string? _readerModel;
     private string? _firmwareVersion;
+    private int _antennaCount = 4; // Default 4-port, auto-detected from reader info
 
     public bool IsConnected => _isConnected;
     public DateTimeOffset? LastReadAt => _lastReadAt;
     public string? ReaderModel => _readerModel;
     public string? FirmwareVersion => _firmwareVersion;
     public string? ReaderId => _readerId;
+    public int AntennaCount => _antennaCount;
 
     public TcpReaderWorker(
         ILogger<TcpReaderWorker> logger,
@@ -103,13 +105,22 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         _logger.LogInformation("Connecting to reader at {Host}:{Port}...", _readerHost, _readerPort);
         await _client.ConnectAsync(_readerHost, _readerPort, ct);
         _stream = _client.GetStream();
-        _stream.ReadTimeout = 5000;
+        _stream.ReadTimeout = 30000;  // 30s timeout — generous for init commands
         _stream.WriteTimeout = 5000;
         _isConnected = true;
         _logger.LogInformation("Connected to reader at {Host}:{Port}", _readerHost, _readerPort);
 
+        // Drain any data the reader is already streaming (e.g., from a previous
+        // connection that left it in Real-Time mode)
+        await DrainStreamAsync(ct);
+        await Task.Delay(200, ct);
+
         // Initialize the reader
         await InitializeReaderAsync(ct);
+
+        // Remove read timeout for the continuous read loop — we use DataAvailable
+        // polling instead, so a timeout would only cause false disconnects
+        _stream.ReadTimeout = System.Threading.Timeout.Infinite;
 
         // Enter real-time read loop
         await ReadLoopAsync(ct);
@@ -138,7 +149,7 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             _logger.LogWarning(ex, "Could not read reader serial number");
         }
 
-        // 2. Get reader info (0x21)
+        // 2. Get reader info (0x21) — also detects antenna count from reader type
         try
         {
             var infoCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x21, ReadOnlySpan<byte>.Empty);
@@ -146,9 +157,27 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             if (infoResp is { Length: >= 8 } && infoResp[3] == 0x00)
             {
                 _firmwareVersion = $"{infoResp[4]}.{infoResp[5]}";
-                _readerModel = $"Type-{infoResp[6]}";
-                _logger.LogInformation("Reader info — Version: {Version}, Type: {Type}, Power: {Power}",
-                    _firmwareVersion, _readerModel, infoResp[7]);
+                byte readerType = infoResp[6];
+                _readerModel = $"Type-{readerType}";
+
+                // Auto-detect antenna count from reader type byte
+                // Types with 8+ ports use higher type codes; common: Type-4 = 4-port, Type-8 = 8-port
+                // Also check Ant byte (index 8 if present) for current antenna config bitmask
+                if (infoResp.Length >= 12)
+                {
+                    byte antByte = infoResp[8 + 3]; // Ant is at offset 8 from Data[] start = index 11
+                    // If any bits 4-7 are set, it's an 8-port reader
+                    if ((antByte & 0xF0) != 0)
+                        _antennaCount = 8;
+                    else
+                        _antennaCount = 4;
+                }
+
+                // Also use reader type as a hint (Type >= 8 likely means 8-port)
+                if (readerType >= 8) _antennaCount = 8;
+
+                _logger.LogInformation("Reader info — Version: {Version}, Model: {Model}, Power: {Power}, AntennaCount: {AntCount}",
+                    _firmwareVersion, _readerModel, infoResp[7], _antennaCount);
             }
         }
         catch (Exception ex)
@@ -171,13 +200,27 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             _logger.LogWarning(ex, "Could not set reader power");
         }
 
-        // 4. Enable antennas 1-4 (0x3F with 0x0F)
+        // 4. Enable antennas — Format 1 (4-port) or Format 2 (8-port)
         try
         {
-            var antCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x3F, [0x0F]);
+            byte[] antData;
+            if (_antennaCount >= 8)
+            {
+                // Format 2: [SetOnce=0x01 (don't persist), AntCfg1=0x00 (reserved for 8-port), AntCfg2=0xFF (all 8)]
+                antData = [0x01, 0x00, 0xFF];
+                _logger.LogInformation("Enabling all 8 antennas (Format 2)...");
+            }
+            else
+            {
+                // Format 1: [Ant=0x0F] bits 0-3 = antennas 1-4
+                antData = [0x0F];
+                _logger.LogInformation("Enabling antennas 1-4 (Format 1)...");
+            }
+
+            var antCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x3F, antData);
             var antResp = await SendCommandInternalAsync(antCmd, ct);
             if (antResp is { Length: >= 4 } && antResp[3] == 0x00)
-                _logger.LogInformation("Antennas 1-4 enabled");
+                _logger.LogInformation("Antennas enabled ({Count}-port)", _antennaCount);
             else
                 _logger.LogWarning("Failed to enable antennas");
         }
@@ -580,10 +623,30 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         return Task.FromResult(true);
     }
 
-    public Task<bool> ReconnectReaderAsync(CancellationToken ct = default)
+    public async Task<bool> ReconnectReaderAsync(CancellationToken ct = default)
     {
+        // If already connected, return immediately
+        if (_isConnected)
+        {
+            _logger.LogInformation("Reader already connected");
+            return true;
+        }
+
         _manualDisconnect = false;
-        _logger.LogInformation("Reader reconnect requested — will connect on next cycle");
-        return Task.FromResult(true);
+        _logger.LogInformation("Reader reconnect requested — waiting for connection...");
+
+        // Wait up to 10 seconds for connection to establish
+        for (int i = 0; i < 20; i++)
+        {
+            await Task.Delay(500, ct);
+            if (_isConnected)
+            {
+                _logger.LogInformation("Reader connected successfully");
+                return true;
+            }
+        }
+
+        _logger.LogWarning("Reader did not connect within 10 seconds");
+        return false;
     }
 }

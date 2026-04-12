@@ -42,6 +42,7 @@ public sealed class SyncHubService : ISyncHubService
                         SourceDeviceId = payload.DeviceId,
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
+                        SourceClockOffsetMs = racePayload.SourceClockOffsetMs,
                         ReceivedAt = DateTimeOffset.UtcNow
                     });
                 }
@@ -187,6 +188,7 @@ file sealed class RaceStartPayload
     public Guid HeatId { get; set; }
     public int HeatNumber { get; set; }
     public DateTimeOffset GunStartTime { get; set; }
+    public int SourceClockOffsetMs { get; set; }
     public List<RaceStartCandidate>? Candidates { get; set; }
 }
 

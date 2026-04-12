@@ -86,5 +86,6 @@ app.MapDisplayEndpoints();
 app.MapReaderEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapHealthEndpoints();
+app.MapTokenEndpoints();
 
 app.Run();

@@ -34,6 +34,30 @@ public sealed class GateConfigService : IGateConfigService
 
         try
         {
+            // If switching to a different test instance, clean up old data tables
+            // (only data that has already been pulled by at least one device)
+            var currentConfig = await _db.GateConfigs.Where(g => g.IsActive).FirstOrDefaultAsync(ct);
+            if (currentConfig != null && currentConfig.TestInstanceId != config.TestInstanceId)
+            {
+                // Find the max event ID that has been pulled by ANY device
+                var maxPulledEventId = await _db.SyncLogs
+                    .Select(s => (long?)s.LastProcessedEventId)
+                    .MaxAsync(ct) ?? 0;
+
+                var totalEvents = await _db.ProcessedEvents.CountAsync(ct);
+                var maxEventId = totalEvents > 0
+                    ? await _db.ProcessedEvents.MaxAsync(pe => pe.Id, ct)
+                    : 0;
+
+                if (maxPulledEventId >= maxEventId && totalEvents > 0)
+                {
+                    // All data has been synced — safe to clear
+                    await _db.Database.ExecuteSqlRawAsync(
+                        "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, received_sync_data, sync_logs CASCADE", ct);
+                }
+                // If not fully synced, old data remains (will be collected on next pull)
+            }
+
             // Truncate config tables
             await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates CASCADE", ct);
 
@@ -125,7 +149,13 @@ public sealed class GateConfigService : IGateConfigService
                 .Where(g => g.IsActive)
                 .ExecuteUpdateAsync(s => s.SetProperty(g => g.IsActive, false), ct);
 
-            var clockOffsetMs = (int)(config.ServerReferenceTime - DateTime.UtcNow).TotalMilliseconds;
+            // Clock offset = server_time - local_time (ms).
+            // Guard against missing/default ServerReferenceTime (0001-01-01) which
+            // would overflow int and produce a garbage offset.
+            var clockOffsetMs = config.ServerReferenceTime.Year > 2000
+                ? (int)Math.Clamp((config.ServerReferenceTime - DateTime.UtcNow).TotalMilliseconds,
+                    int.MinValue, int.MaxValue)
+                : 0;
 
             _db.GateConfigs.Add(new GateConfig
             {

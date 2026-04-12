@@ -1,4 +1,5 @@
 using APTM.Gate.Api.Services;
+using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -24,7 +25,7 @@ public static class DisplayEndpoints
         .WithDescription("Server-Sent Events stream for real-time display updates. Channels: tag_event, race_start, sync_data, config_updated.")
         .ExcludeFromDescription();
 
-        app.MapGet("/gate/display-data", async (GateDbContext db, CancellationToken ct) =>
+        app.MapGet("/gate/display-data", async (GateDbContext db, IReaderStatusProvider readerStatus, CancellationToken ct) =>
         {
             var gateConfig = await db.GateConfigs
                 .Where(g => g.IsActive)
@@ -44,8 +45,9 @@ public static class DisplayEndpoints
             ActiveHeatData? activeHeat = null;
             if (latestRaceStart is not null)
             {
+                var candidateIds = latestRaceStart.CandidateIds ?? [];
                 var heatCandidates = await db.Candidates
-                    .Where(c => latestRaceStart.CandidateIds.Contains(c.CandidateId))
+                    .Where(c => candidateIds.Contains(c.CandidateId))
                     .Select(c => new HeatCandidateData
                     {
                         CandidateId = c.CandidateId,
@@ -78,8 +80,10 @@ public static class DisplayEndpoints
                     CandidateId = x.pe.CandidateId,
                     Name = x.c.Name,
                     JacketNumber = x.c.JacketNumber,
+                    TagEPC = x.pe.TagEPC,
                     ReadTime = x.pe.ReadTime,
-                    ElapsedSeconds = x.pe.DurationSeconds
+                    ElapsedSeconds = x.pe.DurationSeconds,
+                    HeatNumber = x.pe.HeatNumber
                 })
                 .ToListAsync(ct);
 
@@ -114,6 +118,7 @@ public static class DisplayEndpoints
             var data = new DisplayData
             {
                 GateRole = gateConfig.GateRole,
+                ReaderConnected = readerStatus.IsConnected,
                 ActiveEventId = gateConfig.ActiveEventId,
                 ActiveEventName = gateConfig.ActiveEventName,
                 TestInstanceName = gateConfig.TestInstanceName,
@@ -125,8 +130,8 @@ public static class DisplayEndpoints
                 Attendance = new AttendanceData
                 {
                     TotalPresent = totalPresent,
-                    TotalAbsent = totalCandidates - totalPresent,
-                    TotalNotScanned = 0
+                    TotalAbsent = 0,  // Only set when candidates are explicitly marked absent
+                    TotalNotScanned = totalCandidates - totalPresent
                 }
             };
 

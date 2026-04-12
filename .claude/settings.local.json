@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(xargs -d '\\\\n' git rm --cached -q)",
-      "Bash(grep -vE '\\\\.\\(sh|txt|md|ps1\\)$')"
+      "Bash(grep -vE '\\\\.\\(sh|txt|md|ps1\\)$')",
+      "Bash(xargs grep:*)",
+      "Bash(grep -E \"\\\\.cs$\")",
+      "Bash(find . -name \"*.kt\" -type f -exec grep -l \"syncQueueDao.insert\\\\|SyncQueueItem\\(\" {} \\\\;)",
+      "Bash(dotnet ef:*)",
+      "Bash(dotnet build:*)"
     ]
   }
 }
