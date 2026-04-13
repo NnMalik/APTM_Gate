@@ -5,12 +5,10 @@
 -- ============================================================================
 
 -- 1. tag_event: Fires on processed_events INSERT (first reads only).
---    Joins candidates to include name + jacket_number in the payload.
+--    Reads denormalized name + jacket_number directly from the row (no JOIN needed).
 CREATE OR REPLACE FUNCTION notify_tag_event() RETURNS trigger AS $$
-DECLARE
-    payload JSON;
 BEGIN
-    SELECT json_build_object(
+    PERFORM pg_notify('tag_event', json_build_object(
         'id', NEW.id,
         'candidate_id', NEW.candidate_id,
         'tag_epc', NEW.tag_epc,
@@ -18,12 +16,9 @@ BEGIN
         'read_time', NEW.read_time,
         'duration_seconds', NEW.duration_seconds,
         'is_first_read', NEW.is_first_read,
-        'jacket_number', c.jacket_number,
-        'name', c.name
-    ) INTO payload
-    FROM candidates c WHERE c.candidate_id = NEW.candidate_id;
-
-    PERFORM pg_notify('tag_event', payload::text);
+        'jacket_number', NEW.jacket_number,
+        'name', NEW.candidate_name
+    )::text);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -42,7 +37,7 @@ BEGIN
     PERFORM pg_notify('race_start', json_build_object(
         'heat_id', NEW.heat_id,
         'heat_number', NEW.heat_number,
-        'gun_start_time', NEW.gun_start_time,
+        'gun_start_time', to_char(NEW.gun_start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'candidate_ids', NEW.candidate_ids
     )::text);
     RETURN NEW;

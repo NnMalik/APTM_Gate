@@ -58,8 +58,8 @@ public sealed class GateConfigService : IGateConfigService
                 // If not fully synced, old data remains (will be collected on next pull)
             }
 
-            // Truncate config tables
-            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates CASCADE", ct);
+            // Truncate config tables + race start times (stale starts from previous events must not affect new elapsed calculations)
+            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates, race_start_times CASCADE", ct);
 
             // Insert candidates
             foreach (var c in config.Candidates)

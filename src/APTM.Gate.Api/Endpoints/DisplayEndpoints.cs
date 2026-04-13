@@ -25,7 +25,7 @@ public static class DisplayEndpoints
         .WithDescription("Server-Sent Events stream for real-time display updates. Channels: tag_event, race_start, sync_data, config_updated.")
         .ExcludeFromDescription();
 
-        app.MapGet("/gate/display-data", async (GateDbContext db, IReaderStatusProvider readerStatus, CancellationToken ct) =>
+        app.MapGet("/gate/display-data", async (GateDbContext db, IReaderStatusProvider readerStatus, IGateStatusProvider gateStatus, CancellationToken ct) =>
         {
             var gateConfig = await db.GateConfigs
                 .Where(g => g.IsActive)
@@ -65,25 +65,21 @@ public static class DisplayEndpoints
                 };
             }
 
-            // Get finish reads for current event only
+            // Get finish reads for current event only (reads from denormalized columns — no JOIN)
             var finishReads = await db.ProcessedEvents
                 .Where(pe => pe.EventType == "finish" && pe.IsFirstRead)
                 .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderBy(pe => pe.ReadTime)
-                .Join(db.Candidates,
-                    pe => pe.CandidateId,
-                    c => c.CandidateId,
-                    (pe, c) => new { pe, c })
-                .Select(x => new FinishReadData
+                .Select(pe => new FinishReadData
                 {
                     Position = 0,
-                    CandidateId = x.pe.CandidateId,
-                    Name = x.c.Name,
-                    JacketNumber = x.c.JacketNumber,
-                    TagEPC = x.pe.TagEPC,
-                    ReadTime = x.pe.ReadTime,
-                    ElapsedSeconds = x.pe.DurationSeconds,
-                    HeatNumber = x.pe.HeatNumber
+                    CandidateId = pe.CandidateId,
+                    Name = pe.CandidateName ?? "",
+                    JacketNumber = pe.JacketNumber,
+                    TagEPC = pe.TagEPC,
+                    ReadTime = pe.ReadTime,
+                    ElapsedSeconds = pe.DurationSeconds,
+                    HeatNumber = pe.HeatNumber
                 })
                 .ToListAsync(ct);
 
@@ -91,22 +87,19 @@ public static class DisplayEndpoints
             for (int i = 0; i < finishReads.Count; i++)
                 finishReads[i].Position = i + 1;
 
-            // Start/attendance reads for current event
+            // Start/attendance reads for current event (reads from denormalized columns — no JOIN)
             var startReads = await db.ProcessedEvents
                 .Where(pe => pe.EventType == "start_attendance" && pe.IsFirstRead)
                 .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderByDescending(pe => pe.ReadTime)
-                .Join(db.Candidates,
-                    pe => pe.CandidateId,
-                    c => c.CandidateId,
-                    (pe, c) => new StartReadData
-                    {
-                        CandidateId = pe.CandidateId,
-                        Name = c.Name,
-                        JacketNumber = c.JacketNumber,
-                        TagEPC = pe.TagEPC,
-                        ReadTime = pe.ReadTime
-                    })
+                .Select(pe => new StartReadData
+                {
+                    CandidateId = pe.CandidateId,
+                    Name = pe.CandidateName ?? "",
+                    JacketNumber = pe.JacketNumber,
+                    TagEPC = pe.TagEPC,
+                    ReadTime = pe.ReadTime
+                })
                 .ToListAsync(ct);
 
             // Attendance count: gate's own processed reads + synced attendance from HHTs
@@ -119,6 +112,7 @@ public static class DisplayEndpoints
             {
                 GateRole = gateConfig.GateRole,
                 ReaderConnected = readerStatus.IsConnected,
+                IsProcessingActive = gateStatus.IsActive,
                 ActiveEventId = gateConfig.ActiveEventId,
                 ActiveEventName = gateConfig.ActiveEventName,
                 TestInstanceName = gateConfig.TestInstanceName,

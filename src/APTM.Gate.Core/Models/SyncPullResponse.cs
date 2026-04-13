@@ -6,6 +6,7 @@ public sealed class SyncPullResponse
     public List<ReceivedSyncDataDto> ReceivedSyncData { get; set; } = [];
     public List<RaceStartTimeDto> RaceStartTimes { get; set; } = [];
     public long HighWaterMark { get; set; }
+    public long? SyncDataHighWaterMs { get; set; }
 }
 
 public sealed class ReceivedSyncDataDto

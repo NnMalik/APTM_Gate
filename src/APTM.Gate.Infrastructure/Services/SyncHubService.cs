@@ -25,7 +25,8 @@ public sealed class SyncHubService : ISyncHubService
         // If race_start, also insert into race_start_times
         if (string.Equals(payload.DataType, "race_start", StringComparison.OrdinalIgnoreCase))
         {
-            var racePayload = payload.Payload.Deserialize<RaceStartPayload>();
+            var racePayload = payload.Payload.Deserialize<RaceStartPayload>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (racePayload is not null)
             {
                 var existsHeat = await _db.RaceStartTimes
@@ -37,12 +38,12 @@ public sealed class SyncHubService : ISyncHubService
                     {
                         Id = Guid.NewGuid(),
                         HeatId = racePayload.HeatId,
-                        HeatNumber = racePayload.HeatNumber,
+                        HeatNumber = (int)racePayload.HeatNumber,
                         GunStartTime = racePayload.GunStartTime,
                         SourceDeviceId = payload.DeviceId,
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
-                        SourceClockOffsetMs = racePayload.SourceClockOffsetMs,
+                        SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
                         ReceivedAt = DateTimeOffset.UtcNow
                     });
                 }
@@ -67,34 +68,40 @@ public sealed class SyncHubService : ISyncHubService
 
     public async Task<SyncPullResponse> PullAsync(
         Guid pullerDeviceId, string pullerDeviceCode,
-        long sinceEventId, CancellationToken ct = default)
+        long sinceEventId, long? sinceSyncMs = null, CancellationToken ct = default)
     {
+        // Read candidate info directly from the denormalized columns on ProcessedEvent
+        // (no JOIN to Candidates — survives candidate table truncation across config pushes)
         var events = await _db.ProcessedEvents
             .AsNoTracking()
             .Where(pe => pe.Id > sinceEventId)
             .OrderBy(pe => pe.Id)
-            .Join(_db.Candidates,
-                pe => pe.CandidateId,
-                c => c.CandidateId,
-                (pe, c) => new ProcessedEventDto
-                {
-                    Id = pe.Id,
-                    CandidateId = pe.CandidateId,
-                    TagEpc = pe.TagEPC,
-                    EventType = pe.EventType,
-                    EventId = pe.EventId,
-                    ReadTime = pe.ReadTime,
-                    DurationSeconds = pe.DurationSeconds,
-                    CheckpointSequence = pe.CheckpointSequence,
-                    IsFirstRead = pe.IsFirstRead,
-                    CandidateName = c.Name,
-                    JacketNumber = c.JacketNumber,
-                    ProcessedAt = pe.ProcessedAt
-                })
+            .Select(pe => new ProcessedEventDto
+            {
+                Id = pe.Id,
+                CandidateId = pe.CandidateId,
+                TagEpc = pe.TagEPC,
+                EventType = pe.EventType,
+                EventId = pe.EventId,
+                ReadTime = pe.ReadTime,
+                DurationSeconds = pe.DurationSeconds,
+                CheckpointSequence = pe.CheckpointSequence,
+                IsFirstRead = pe.IsFirstRead,
+                CandidateName = pe.CandidateName ?? "",
+                JacketNumber = pe.JacketNumber,
+                ProcessedAt = pe.ProcessedAt
+            })
             .ToListAsync(ct);
 
-        var syncData = await _db.ReceivedSyncData
-            .AsNoTracking()
+        // Incremental sync data: filter by receivedAt if a since-timestamp was provided
+        var syncQuery = _db.ReceivedSyncData.AsNoTracking();
+        if (sinceSyncMs.HasValue && sinceSyncMs.Value > 0)
+        {
+            var sinceTime = DateTimeOffset.FromUnixTimeMilliseconds(sinceSyncMs.Value);
+            syncQuery = syncQuery.Where(r => r.ReceivedAt > sinceTime);
+        }
+
+        var syncData = await syncQuery
             .OrderBy(r => r.ReceivedAt)
             .Select(r => new ReceivedSyncDataDto
             {
@@ -138,7 +145,10 @@ public sealed class SyncHubService : ISyncHubService
             ProcessedEvents = events,
             ReceivedSyncData = syncData,
             RaceStartTimes = raceStarts,
-            HighWaterMark = highWaterMark
+            HighWaterMark = highWaterMark,
+            SyncDataHighWaterMs = syncData.Count > 0
+                ? syncData.Max(s => s.ReceivedAt).ToUnixTimeMilliseconds()
+                : sinceSyncMs
         };
     }
 
@@ -182,13 +192,15 @@ public sealed class SyncHubService : ISyncHubService
     }
 }
 
-// Internal DTO for deserializing race_start payload
+// Internal DTO for deserializing race_start payload.
+// Gson (HHT) serialises Map<String,Any> numbers as doubles (e.g. 1.0 instead of 1),
+// so numeric fields use double here and are cast to int when stored.
 file sealed class RaceStartPayload
 {
     public Guid HeatId { get; set; }
-    public int HeatNumber { get; set; }
+    public double HeatNumber { get; set; }
     public DateTimeOffset GunStartTime { get; set; }
-    public int SourceClockOffsetMs { get; set; }
+    public double SourceClockOffsetMs { get; set; }
     public List<RaceStartCandidate>? Candidates { get; set; }
 }
 

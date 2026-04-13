@@ -76,8 +76,8 @@ public static class ConfigEndpoints
                     pe.DurationSeconds,
                     pe.CheckpointSequence,
                     pe.IsFirstRead,
-                    candidateName = pe.Candidate.Name,
-                    jacketNumber = pe.Candidate.JacketNumber,
+                    candidateName = pe.CandidateName,
+                    jacketNumber = pe.JacketNumber,
                     pe.ProcessedAt
                 })
                 .ToListAsync(ct);

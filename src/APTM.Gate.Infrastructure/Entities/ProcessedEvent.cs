@@ -12,6 +12,8 @@ public class ProcessedEvent
     public int? CheckpointSequence { get; set; }
     public int? HeatNumber { get; set; }
     public bool IsFirstRead { get; set; } = true;
+    public string? CandidateName { get; set; }
+    public int? JacketNumber { get; set; }
     public long? RawBufferId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; } = DateTimeOffset.UtcNow;
 

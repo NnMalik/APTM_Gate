@@ -42,6 +42,12 @@ public sealed class BufferProcessingService : IBufferProcessingService
             .Where(ta => epcs.Contains(ta.TagEPC))
             .ToDictionaryAsync(ta => ta.TagEPC, ta => ta.CandidateId, ct);
 
+        // Preload candidate details for denormalization into ProcessedEvent
+        var candidateIds = tagMap.Values.Distinct().ToList();
+        var candidateMap = await _db.Candidates
+            .Where(c => candidateIds.Contains(c.CandidateId))
+            .ToDictionaryAsync(c => c.CandidateId, ct);
+
         // Determine event type from gate role
         var eventType = gateConfig.GateRole.ToLower() switch
         {
@@ -119,13 +125,24 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 // Convert HHT-local gun start to gate-local time frame.
                 // Guard: skip adjustment if offset is unreasonable (> 24h = device never synced).
                 var offsetDiffMs = (long)gateConfig.ClockOffsetMs - raceStart.SourceClockOffsetMs;
-                var adjustedGunStart = Math.Abs(offsetDiffMs) <= 86_400_000
-                    ? raceStart.GunStartTime.AddMilliseconds(offsetDiffMs)
-                    : raceStart.GunStartTime;
+                var adjustedGunStart = raceStart.GunStartTime;
+                if (Math.Abs(offsetDiffMs) <= 86_400_000)
+                {
+                    try
+                    {
+                        adjustedGunStart = raceStart.GunStartTime.AddMilliseconds(offsetDiffMs);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Offset would overflow DateTimeOffset bounds — use unadjusted time
+                    }
+                }
                 var elapsed = row.ReadTime - adjustedGunStart;
                 durationSeconds = elapsed.TotalSeconds > 0 ? (decimal)elapsed.TotalSeconds : 0m;
                 heatNumber = raceStart.HeatNumber;
             }
+
+            candidateMap.TryGetValue(candidateId, out var candidate);
 
             var processedEvent = new ProcessedEvent
             {
@@ -138,6 +155,8 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 HeatNumber = heatNumber,
                 CheckpointSequence = gateConfig.CheckpointSequence,
                 IsFirstRead = true,
+                CandidateName = candidate?.Name,
+                JacketNumber = candidate?.JacketNumber,
                 RawBufferId = row.Id,
                 ProcessedAt = DateTimeOffset.UtcNow
             };

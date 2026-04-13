@@ -19,7 +19,7 @@
         <div class="header-center">
             <div class="test-name" id="testName">--</div>
             <div class="test-date" id="testDate">--</div>
-            <div class="test-date" id="eventName" style="color: #38bdf8; font-weight: bold;">--</div>
+            <div class="event-name" id="eventName">--</div>
         </div>
         <div class="header-right">
             <span class="clock" id="clock">--:--:--</span>
@@ -28,6 +28,7 @@
                 <span id="sseLabel">Connecting...</span>
             </div>
             <div id="readerStatus" class="reader-status disconnected" style="font-size: 0.75rem; margin-top: 2px;">Reader: --</div>
+            <div id="processingStatus" class="processing-status idle" style="font-size: 0.75rem; margin-top: 2px;">Processing: --</div>
         </div>
     </div>
 
@@ -53,13 +54,13 @@
 
     <!-- ── Main Content ─────────────────────────────────────────────────── -->
     <div class="main">
-        <div class="main-left">
+        <div class="main-left" style="flex:1; max-width:100%;">
             <!-- Heat Timer -->
             <div class="card" id="heatCard" style="display:none;">
                 <div class="card-header">Active Heat</div>
                 <div class="card-body" style="overflow:visible;">
                     <div class="heat-timer-section">
-                        <div class="heat-timer-value" id="heatTimer">00:00.0</div>
+                        <div class="heat-timer-value" id="heatTimer">00:00.000</div>
                         <div class="heat-timer-label">Elapsed Time</div>
                     </div>
                     <div class="heat-info-row">
@@ -87,7 +88,6 @@
                                 <th>Jacket</th>
                                 <th>Name</th>
                                 <th>Elapsed</th>
-                                <th style="width:140px;">Finish Time</th>
                             </tr>
                         </thead>
                         <tbody id="resultsBody"></tbody>
@@ -99,23 +99,14 @@
                 </div>
             </div>
         </div>
-
-        <!-- Activity Feed -->
-        <div class="main-right">
-            <div class="card flex-grow">
-                <div class="card-header">
-                    <span>Live Activity</span>
-                    <span class="card-count" id="feedCount">0</span>
-                </div>
-                <div class="card-body" id="activityFeed">
-                    <div class="empty-state">
-                        <div class="empty-icon">&#128225;</div>
-                        <div class="empty-text">Waiting for events...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
+
+    <!-- ── Toast Container ──────────────────────────────────────────────── -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Hidden activity feed element (used by display.js addFeed, kept for compatibility) -->
+    <div id="activityFeed" style="display:none;"></div>
+    <span id="feedCount" style="display:none;">0</span>
 
     <script src="display.js"></script>
     <script>
@@ -147,18 +138,28 @@
                     elapsedSeconds: data.duration_seconds,
                 }, true);
             }
+            // No toast for tag events — they're in the table
         }
 
         // Called by display.js on race_start SSE
         function onRaceStart(data) {
             Display.setText('statHeat', data.heat_number ?? '--');
+            Display.showToast('start', `Heat ${data.heat_number} — Gun fired`);
 
-            // Recalculate elapsed for all existing rows if they didn't have start time
-            recalculateElapsed();
+            // Clear table for the new heat — candidates will reappear as they cross
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+            finisherCount = 0;
+            finisherRows.length = 0;
+            seenCandidateIds.clear();
+            document.getElementById('resultsEmpty').style.display = '';
+            document.getElementById('resultsTable').style.display = 'none';
+            Display.setText('resultCount', 0);
+            Display.setText('statFinishers', 0);
         }
 
         function onSyncData(data) {
-            // Re-fetch to update attendance stats if relevant
+            Display.showToast('sync', `${data.data_type} from ${data.source_device_code || 'HHT'}`);
             if (data.data_type === 'attendance') {
                 setTimeout(Display.loadDisplayData, 300);
             }
@@ -194,10 +195,6 @@
                 }
             }
 
-            const finishTimeStr = readTime
-                ? readTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 1 })
-                : '--';
-
             const tr = document.createElement('tr');
             if (animate) tr.className = 'new-row';
             tr.dataset.readTime = readTime ? readTime.toISOString() : '';
@@ -206,8 +203,7 @@
                 `<td class="col-pos">${pos}</td>` +
                 `<td class="col-jacket"><span>${jacket}</span></td>` +
                 `<td>${read.name || read.candidateId?.substring(0, 8) || '--'}</td>` +
-                `<td class="col-time col-elapsed">${elapsedStr}</td>` +
-                `<td>${finishTimeStr}</td>`;
+                `<td class="col-time col-elapsed">${elapsedStr}</td>`;
 
             tbody.appendChild(tr);
             finisherRows.push(tr);

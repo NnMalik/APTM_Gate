@@ -4,6 +4,7 @@ public sealed class DisplayData
 {
     public string GateRole { get; set; } = default!;
     public bool ReaderConnected { get; set; }
+    public bool IsProcessingActive { get; set; }
     public int? ActiveEventId { get; set; }
     public string? ActiveEventName { get; set; }
     public string TestInstanceName { get; set; } = default!;

@@ -60,6 +60,13 @@ const Display = (() => {
             readerEl.className = 'reader-status ' + (data.readerConnected ? 'connected' : 'disconnected');
         }
 
+        // Processing status
+        const procEl = document.getElementById('processingStatus');
+        if (procEl) {
+            procEl.textContent = data.isProcessingActive ? 'Processing: Active' : 'Processing: Idle';
+            procEl.className = 'processing-status ' + (data.isProcessingActive ? 'active' : 'idle');
+        }
+
         // Stats
         setText('statTotal', data.totalCandidates ?? '--');
         if (data.attendance) {
@@ -113,14 +120,14 @@ const Display = (() => {
         state.timerInterval = setInterval(() => {
             if (!state.gunStartTime) return;
             const elapsed = (Date.now() - state.gunStartTime.getTime()) / 1000;
-            el.textContent = elapsed < 0 ? '00:00.0' : formatElapsed(elapsed);
-        }, 100);
+            el.textContent = elapsed < 0 ? '00:00.000' : formatElapsed(elapsed);
+        }, 50);
     }
 
     function formatElapsed(seconds) {
         const m = Math.floor(seconds / 60);
-        const s = (seconds % 60).toFixed(1);
-        return `${String(m).padStart(2, '0')}:${s.padStart(4, '0')}`;
+        const s = (seconds % 60).toFixed(3);
+        return `${String(m).padStart(2, '0')}:${s.padStart(6, '0')}`;
     }
 
     function formatDuration(seconds) {
@@ -198,6 +205,33 @@ const Display = (() => {
         while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
     }
 
+    // ── Toast Notifications ──────────────────────────────────────────────────
+    const MAX_TOASTS = 3;
+    function showToast(type, message) {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        const now = new Date().toLocaleTimeString('en-IN', { hour12: false });
+        toast.innerHTML = `<span class="toast-time">${now}</span>` +
+            `<span class="toast-type ${type}">${type}</span> ` +
+            `<span>${escapeHtml(message)}</span>`;
+
+        container.appendChild(toast);
+
+        // Remove oldest if over limit
+        while (container.children.length > MAX_TOASTS) {
+            container.removeChild(container.firstChild);
+        }
+
+        // Auto-dismiss after 5s
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => toast.remove(), 400);
+        }, 5000);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
     function setText(id, value) {
         const el = document.getElementById(id);
@@ -233,7 +267,7 @@ const Display = (() => {
     }
 
     // Public API
-    return { init, state, formatDuration, formatElapsed, addFeed, setText, loadDisplayData };
+    return { init, state, formatDuration, formatElapsed, addFeed, showToast, setText, loadDisplayData };
 })();
 
 // Auto-init on DOMContentLoaded

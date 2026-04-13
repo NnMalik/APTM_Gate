@@ -25,13 +25,14 @@ public static class SyncEndpoints
         .WithSummary("Push sync data to this gate")
         .WithDescription("Receives sync data from another device. Deduplicates by clientRecordId.");
 
-        group.MapGet("/pull", async (Guid? deviceId, string? deviceCode, long? since,
+        group.MapGet("/pull", async (Guid? deviceId, string? deviceCode, long? since, long? sinceSyncMs,
             ISyncHubService syncHub, CancellationToken ct) =>
         {
             var response = await syncHub.PullAsync(
                 deviceId ?? Guid.Empty,
                 deviceCode ?? "unknown",
                 since ?? 0,
+                sinceSyncMs,
                 ct);
             return Results.Ok(response);
         })

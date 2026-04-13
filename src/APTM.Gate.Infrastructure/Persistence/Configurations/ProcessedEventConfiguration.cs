@@ -20,6 +20,8 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.Property(x => x.CheckpointSequence).HasColumnName("checkpoint_sequence");
         builder.Property(x => x.HeatNumber).HasColumnName("heat_number");
         builder.Property(x => x.IsFirstRead).HasColumnName("is_first_read").HasDefaultValue(true).IsRequired();
+        builder.Property(x => x.CandidateName).HasColumnName("candidate_name").HasMaxLength(200);
+        builder.Property(x => x.JacketNumber).HasColumnName("jacket_number");
         builder.Property(x => x.RawBufferId).HasColumnName("raw_buffer_id");
         builder.Property(x => x.ProcessedAt).HasColumnName("processed_at").IsRequired();
         builder.HasIndex(x => x.CandidateId).HasDatabaseName("idx_processed_events_candidate");
