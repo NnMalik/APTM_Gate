@@ -34,17 +34,28 @@ public sealed class SyncHubService : ISyncHubService
 
                 if (!existsHeat)
                 {
+                    // Handle clock differences between HHT and gate:
+                    // - If HHT clock is ahead: gun start is in the future for gate
+                    //   → clamp to gate's current time so the timer starts immediately.
+                    // - If HHT clock is behind: gun start is in the past for gate
+                    //   → use HHT's timestamp (elapsed is slightly inflated but positive).
+                    // - If clocks are synced: HHT's timestamp is accurate.
+                    var now = DateTimeOffset.UtcNow;
+                    var effectiveGunStart = racePayload.GunStartTime > now
+                        ? now   // HHT clock is ahead — use gate's time to prevent negative elapsed
+                        : racePayload.GunStartTime;
+
                     _db.RaceStartTimes.Add(new RaceStartTime
                     {
                         Id = Guid.NewGuid(),
                         HeatId = racePayload.HeatId,
                         HeatNumber = (int)racePayload.HeatNumber,
-                        GunStartTime = racePayload.GunStartTime,
+                        GunStartTime = effectiveGunStart,
                         SourceDeviceId = payload.DeviceId,
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
                         SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
-                        ReceivedAt = DateTimeOffset.UtcNow
+                        ReceivedAt = now
                     });
                 }
             }

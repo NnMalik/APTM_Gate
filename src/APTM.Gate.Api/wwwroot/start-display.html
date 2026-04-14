@@ -16,7 +16,10 @@
         <div class="header-center">
             <div class="test-name" id="testName">--</div>
             <div class="test-date" id="testDate">--</div>
-            <div class="event-name" id="eventName">--</div>
+            <div style="display:flex; align-items:center; justify-content:center; gap:8px;">
+                <div class="event-name" id="eventName">--</div>
+                <span class="event-status-badge" id="eventStatus" style="display:none;">--</span>
+            </div>
         </div>
         <div class="header-right">
             <span class="clock" id="clock">--:--:--</span>
@@ -55,14 +58,14 @@
             <!-- Active Heat -->
             <div class="card" id="heatCard" style="display:none;">
                 <div class="card-header">
-                    <span>Active Heat</span>
+                    <span>Active Group</span>
                     <span class="live-indicator" id="liveIndicator">
                         <span class="live-dot"></span> LIVE
                     </span>
                 </div>
                 <div class="card-body" style="overflow:visible;">
                     <div class="heat-info-row">
-                        <span class="heat-info-label">Heat #</span>
+                        <span class="heat-info-label">Group #</span>
                         <span class="heat-info-value" id="heatNumber">--</span>
                     </div>
                     <div class="heat-info-row">

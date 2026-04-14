@@ -19,7 +19,10 @@
         <div class="header-center">
             <div class="test-name" id="testName">--</div>
             <div class="test-date" id="testDate">--</div>
-            <div class="event-name" id="eventName">--</div>
+            <div style="display:flex; align-items:center; justify-content:center; gap:8px;">
+                <div class="event-name" id="eventName">--</div>
+                <span class="event-status-badge" id="eventStatus" style="display:none;">--</span>
+            </div>
         </div>
         <div class="header-right">
             <span class="clock" id="clock">--:--:--</span>
@@ -40,7 +43,7 @@
         </div>
         <div class="stat-item">
             <div class="stat-value cyan" id="statHeat">--</div>
-            <div class="stat-label">Current Heat</div>
+            <div class="stat-label">Current Group</div>
         </div>
         <div class="stat-item">
             <div class="stat-value green" id="statFinishers">0</div>
@@ -57,14 +60,14 @@
         <div class="main-left" style="flex:1; max-width:100%;">
             <!-- Heat Timer -->
             <div class="card" id="heatCard" style="display:none;">
-                <div class="card-header">Active Heat</div>
+                <div class="card-header">Active Group</div>
                 <div class="card-body" style="overflow:visible;">
                     <div class="heat-timer-section">
                         <div class="heat-timer-value" id="heatTimer">00:00.000</div>
                         <div class="heat-timer-label">Elapsed Time</div>
                     </div>
                     <div class="heat-info-row">
-                        <span class="heat-info-label">Heat #</span>
+                        <span class="heat-info-label">Group #</span>
                         <span class="heat-info-value" id="heatNumber">--</span>
                     </div>
                     <div class="heat-info-row" style="padding-bottom:12px;">
@@ -85,9 +88,10 @@
                         <thead>
                             <tr>
                                 <th>Pos</th>
+                                <th>Group</th>
                                 <th>Jacket</th>
                                 <th>Name</th>
-                                <th>Elapsed</th>
+                                <th>Total Time</th>
                             </tr>
                         </thead>
                         <tbody id="resultsBody"></tbody>
@@ -144,7 +148,7 @@
         // Called by display.js on race_start SSE
         function onRaceStart(data) {
             Display.setText('statHeat', data.heat_number ?? '--');
-            Display.showToast('start', `Heat ${data.heat_number} — Gun fired`);
+            Display.showToast('start', `Group ${data.heat_number} — Gun fired`);
 
             // Clear table for the new heat — candidates will reappear as they cross
             const tbody = document.getElementById('resultsBody');
@@ -199,8 +203,11 @@
             if (animate) tr.className = 'new-row';
             tr.dataset.readTime = readTime ? readTime.toISOString() : '';
 
+            const group = read.heatNumber ?? '--';
+
             tr.innerHTML =
                 `<td class="col-pos">${pos}</td>` +
+                `<td>${group}</td>` +
                 `<td class="col-jacket"><span>${jacket}</span></td>` +
                 `<td>${read.name || read.candidateId?.substring(0, 8) || '--'}</td>` +
                 `<td class="col-time col-elapsed">${elapsedStr}</td>`;

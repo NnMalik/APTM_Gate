@@ -113,32 +113,35 @@ public sealed class BufferProcessingService : IBufferProcessingService
             // Compute duration for finish gates with heat-candidate matching
             decimal? durationSeconds = null;
             int? heatNumber = null;
-            if (eventType == "finish" && raceStarts.Count > 0)
+            if (eventType == "finish")
             {
+                if (raceStarts.Count == 0)
+                {
+                    // No gun fired yet — leave as PENDING so the worker retries
+                    // once a race_start arrives. Don't consume the first-read slot.
+                    continue;
+                }
+
                 // Match candidate to their specific heat, fall back to latest start
                 var raceStart = raceStarts
                     .FirstOrDefault(r => r.CandidateIds is not null && r.CandidateIds.Contains(candidateId))
                     ?? raceStarts[0];
 
-                // Adjust for clock drift between HHT and gate:
-                // Both offsets are "server_time - local_time" in ms.
-                // Convert HHT-local gun start to gate-local time frame.
-                // Guard: skip adjustment if offset is unreasonable (> 24h = device never synced).
-                var offsetDiffMs = (long)gateConfig.ClockOffsetMs - raceStart.SourceClockOffsetMs;
-                var adjustedGunStart = raceStart.GunStartTime;
-                if (Math.Abs(offsetDiffMs) <= 86_400_000)
+                // GunStartTime is already in gate-local time (adjusted at receipt in SyncHubService).
+                // Both ReadTime and GunStartTime are in the same clock reference — simple subtraction.
+                var elapsed = row.ReadTime - raceStart.GunStartTime;
+
+                if (elapsed.TotalSeconds <= 0)
                 {
-                    try
-                    {
-                        adjustedGunStart = raceStart.GunStartTime.AddMilliseconds(offsetDiffMs);
-                    }
-                    catch (ArgumentOutOfRangeException)
-                    {
-                        // Offset would overflow DateTimeOffset bounds — use unadjusted time
-                    }
+                    // Read happened before gun fired — discard so the real
+                    // crossing after gun fire can claim the first-read slot.
+                    row.Status = "DUPLICATE";
+                    row.IsDuplicate = true;
+                    processed++;
+                    continue;
                 }
-                var elapsed = row.ReadTime - adjustedGunStart;
-                durationSeconds = elapsed.TotalSeconds > 0 ? (decimal)elapsed.TotalSeconds : 0m;
+
+                durationSeconds = (decimal)elapsed.TotalSeconds;
                 heatNumber = raceStart.HeatNumber;
             }
 

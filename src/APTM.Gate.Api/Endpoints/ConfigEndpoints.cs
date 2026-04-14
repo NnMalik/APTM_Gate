@@ -3,6 +3,7 @@ using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace APTM.Gate.Api.Endpoints;
 
@@ -41,11 +42,24 @@ public static class ConfigEndpoints
         .WithSummary("Get gate status")
         .WithDescription("Returns gate role, event counts, sync pull history, and last event timestamp.");
 
-        group.MapPut("/status", (StatusRequest request, IGateStatusProvider statusProvider) =>
+        group.MapPut("/status", async (StatusRequest request, IGateStatusProvider statusProvider,
+            IConfiguration config, CancellationToken ct) =>
         {
             var previous = statusProvider.IsActive ? "active" : "idle";
             var newStatus = string.Equals(request.Status, "active", StringComparison.OrdinalIgnoreCase);
             statusProvider.SetActive(newStatus);
+
+            // Notify display to refresh so Processing status updates immediately
+            try
+            {
+                var connStr = config.GetConnectionString("GateDb");
+                await using var conn = new NpgsqlConnection(connStr);
+                await conn.OpenAsync(ct);
+                var payload = System.Text.Json.JsonSerializer.Serialize(new { processingStatus = newStatus ? "active" : "idle" });
+                await using var cmd = new NpgsqlCommand($"NOTIFY config_updated, '{payload}'", conn);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            catch { /* display refresh is best-effort */ }
 
             return Results.Ok(new
             {
@@ -55,7 +69,7 @@ public static class ConfigEndpoints
         })
         .WithName("SetGateStatus")
         .WithSummary("Toggle gate active/idle status")
-        .WithDescription("Sets the gate to active (processing tags) or idle. Signals the BufferProcessorWorker.");
+        .WithDescription("Sets the gate to active (processing tags) or idle. Signals the BufferProcessorWorker and notifies display.");
 
         group.MapGet("/events", async (long? since, GateDbContext db, CancellationToken ct) =>
         {

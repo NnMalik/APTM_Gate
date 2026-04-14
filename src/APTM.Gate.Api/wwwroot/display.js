@@ -85,10 +85,15 @@ const Display = (() => {
             onStartReadsLoaded(data.startReads);
         }
 
-        // Active heat
+        // Active heat — or clear if no heat
         if (data.activeHeat) {
             applyHeat(data.activeHeat);
+        } else {
+            clearHeat();
         }
+
+        // Derive event status
+        updateEventStatus(data);
     }
 
     function applyHeat(heat) {
@@ -100,7 +105,7 @@ const Display = (() => {
         if (timerCard) timerCard.style.display = 'block';
 
         if (state.gunStartTime) {
-            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false }));
+            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
             setLiveIndicator(true);
             startHeatTimer();
         }
@@ -109,6 +114,55 @@ const Display = (() => {
         if (heat.candidates && typeof onHeatCandidatesLoaded === 'function') {
             onHeatCandidatesLoaded(heat.candidates);
         }
+    }
+
+    function clearHeat() {
+        // Stop timer and clear gun start state
+        if (state.timerInterval) {
+            clearInterval(state.timerInterval);
+            state.timerInterval = null;
+        }
+        state.gunStartTime = null;
+
+        const timerCard = document.getElementById('heatCard');
+        if (timerCard) timerCard.style.display = 'none';
+
+        const timerEl = document.getElementById('heatTimer');
+        if (timerEl) timerEl.textContent = '00:00.000';
+
+        setText('heatNumber', '--');
+        setText('statHeat', '--');
+        setText('gunStartTime', '--');
+        setLiveIndicator(false);
+    }
+
+    function updateEventStatus(data) {
+        const el = document.getElementById('eventStatus');
+        if (!el) return;
+
+        let status, color, bgColor;
+        if (!data.activeHeat || !data.activeHeat.gunStartTime) {
+            status = 'Not Started';
+            color = '#9CA3AF';
+            bgColor = 'rgba(156, 163, 175, 0.15)';
+        } else if (data.isProcessingActive) {
+            status = 'In Progress';
+            color = '#22C55E';
+            bgColor = 'rgba(34, 197, 94, 0.15)';
+        } else if (data.finishReads && data.finishReads.length > 0) {
+            status = 'Completed';
+            color = '#3B82F6';
+            bgColor = 'rgba(59, 130, 246, 0.15)';
+        } else {
+            status = 'Idle';
+            color = '#F59E0B';
+            bgColor = 'rgba(245, 158, 11, 0.15)';
+        }
+
+        el.textContent = status;
+        el.style.color = color;
+        el.style.background = bgColor;
+        el.style.display = 'inline-block';
     }
 
     // ── Heat Timer ──────────────────────────────────────────────────────────
@@ -134,7 +188,7 @@ const Display = (() => {
         if (seconds == null) return '--';
         const m = Math.floor(seconds / 60);
         const s = (seconds % 60).toFixed(3);
-        return m > 0 ? `${m}:${s.padStart(6, '0')}` : `${s}s`;
+        return `${String(m).padStart(2, '0')}:${s.padStart(6, '0')}`;
     }
 
     // ── SSE Connection ──────────────────────────────────────────────────────
@@ -159,13 +213,13 @@ const Display = (() => {
             const d = JSON.parse(e.data);
             state.gunStartTime = new Date(d.gun_start_time);
             setText('heatNumber', d.heat_number ?? '--');
-            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false }));
+            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
 
             const timerCard = document.getElementById('heatCard');
             if (timerCard) timerCard.style.display = 'block';
             setLiveIndicator(true);
             startHeatTimer();
-            addFeed('start', `Heat ${d.heat_number} — Gun fired`);
+            addFeed('start', `Group ${d.heat_number} — Gun fired`);
 
             if (typeof onRaceStart === 'function') onRaceStart(d);
         });
