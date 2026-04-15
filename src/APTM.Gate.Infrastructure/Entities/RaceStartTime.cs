@@ -6,6 +6,7 @@ public class RaceStartTime
     public Guid HeatId { get; set; }
     public int HeatNumber { get; set; }
     public DateTimeOffset GunStartTime { get; set; }
+    public DateTimeOffset OriginalGunStartTime { get; set; }
     public Guid SourceDeviceId { get; set; }
     public Guid[] CandidateIds { get; set; } = [];
     public int SourceClockOffsetMs { get; set; }

@@ -7,7 +7,18 @@
       "Bash(grep -E \"\\\\.cs$\")",
       "Bash(find . -name \"*.kt\" -type f -exec grep -l \"syncQueueDao.insert\\\\|SyncQueueItem\\(\" {} \\\\;)",
       "Bash(dotnet ef:*)",
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Bash(powershell -NoProfile -Command '& { try { [System.Management.Automation.Language.Parser]::ParseFile\\('\\\\''reset-dev-db.ps1'\\\\'', [ref]$null, [ref]$errors\\); if \\($errors.Count -gt 0\\) { $errors | ForEach-Object { Write-Host \"ERROR: $_\" } } else { Write-Host '\\\\''No parse errors'\\\\'' } } catch { Write-Host \"Parse check: $_\" } }')",
+      "Bash(powershell -NoProfile -File \"C:/Users/DeLL/source/repos/APTM_SN/APTM_SN/reset-dev-db.ps1\" -SeedOnly)",
+      "Bash(powershell -NoProfile -Command \"Get-Content 'C:/Users/DeLL/source/repos/APTM_SN/APTM_SN/reset-dev-testdata.ps1' | Out-Null; Write-Host 'Parse OK'\")",
+      "Bash(grep -i \"\\\\.cs$\")",
+      "Bash(find /c/Users/DeLL/source/repos/APTM_GATE -type f -name \"*.cs\" -exec grep -l \"race-results\\\\|/api/race\" {} \\\\;)",
+      "Bash(find /c/Users/DeLL/source/repos/APTM_SN/APTM_SN -name \"*.cs\" -exec grep -l \"race-results\\\\|RaceResultsIngest\" {} \\\\;)",
+      "Bash(find /c/Users/DeLL/source/repos/APTM_SN/APTM_SN/src -name \"*.cs\" -exec grep -l \"gate\\\\|Gate\\\\|GateUrl\\\\|GateEndpoint\" {} \\\\;)",
+      "Bash(find /c/Users/DeLL/source/repos/APTM_GATE -name \"*.cs\" -exec grep -l \"HttpClient\\\\|HttpPost\\\\|PostAsync\\\\|SendAsync\" {} \\\\;)",
+      "Bash(find /c/Users/DeLL/source/repos -name \"*.cs\" -exec grep -l \"RaceResultsIngestRequest\\\\|/api/race-results\" {} \\\\;)",
+      "Bash(find /c/Users/DeLL/source/repos/APTM_GATE -name \"*.cs\" -exec grep -l \"ConfigPackageDto\" {} \\\\;)",
+      "Bash(./gradlew assembleDebug)"
     ]
   }
 }

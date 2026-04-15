@@ -61,6 +61,7 @@ public static class DisplayEndpoints
                     HeatNumber = latestRaceStart.HeatNumber,
                     HasStartTime = true,
                     GunStartTime = latestRaceStart.GunStartTime,
+                    OriginalGunStartTime = latestRaceStart.OriginalGunStartTime,
                     Candidates = heatCandidates
                 };
             }

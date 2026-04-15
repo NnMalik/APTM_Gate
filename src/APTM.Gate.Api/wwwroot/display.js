@@ -97,6 +97,7 @@ const Display = (() => {
     }
 
     function applyHeat(heat) {
+        // Timer uses adjusted gun time (Gate's clock domain) for correct elapsed
         state.gunStartTime = heat.gunStartTime ? new Date(heat.gunStartTime) : null;
         setText('heatNumber', heat.heatNumber ?? '--');
         setText('statHeat', heat.heatNumber ?? '--');
@@ -105,7 +106,11 @@ const Display = (() => {
         if (timerCard) timerCard.style.display = 'block';
 
         if (state.gunStartTime) {
-            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
+            // Display shows original HHT gun time (what the starter saw) with ms precision
+            const displayTime = heat.originalGunStartTime
+                ? new Date(heat.originalGunStartTime)
+                : state.gunStartTime;
+            setText('gunStartTime', displayTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
             setLiveIndicator(true);
             startHeatTimer();
         }
@@ -211,9 +216,14 @@ const Display = (() => {
 
         src.addEventListener('race_start', (e) => {
             const d = JSON.parse(e.data);
+            // Timer uses adjusted gun time (Gate's clock domain)
             state.gunStartTime = new Date(d.gun_start_time);
+            // Label shows original HHT gun time (what the starter saw)
+            const displayTime = d.original_gun_start_time
+                ? new Date(d.original_gun_start_time)
+                : state.gunStartTime;
             setText('heatNumber', d.heat_number ?? '--');
-            setText('gunStartTime', state.gunStartTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
+            setText('gunStartTime', displayTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
 
             const timerCard = document.getElementById('heatCard');
             if (timerCard) timerCard.style.display = 'block';

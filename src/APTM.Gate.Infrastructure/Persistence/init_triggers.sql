@@ -38,6 +38,7 @@ BEGIN
         'heat_id', NEW.heat_id,
         'heat_number', NEW.heat_number,
         'gun_start_time', to_char(NEW.gun_start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'original_gun_start_time', to_char(NEW.original_gun_start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'candidate_ids', NEW.candidate_ids
     )::text);
     RETURN NEW;

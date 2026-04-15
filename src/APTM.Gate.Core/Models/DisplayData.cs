@@ -30,6 +30,7 @@ public sealed class ActiveHeatData
     public int HeatNumber { get; set; }
     public bool HasStartTime { get; set; }
     public DateTimeOffset? GunStartTime { get; set; }
+    public DateTimeOffset? OriginalGunStartTime { get; set; }
     public List<HeatCandidateData> Candidates { get; set; } = [];
 }
 

@@ -34,23 +34,27 @@ public sealed class SyncHubService : ISyncHubService
 
                 if (!existsHeat)
                 {
-                    // Handle clock differences between HHT and gate:
-                    // - If HHT clock is ahead: gun start is in the future for gate
-                    //   → clamp to gate's current time so the timer starts immediately.
-                    // - If HHT clock is behind: gun start is in the past for gate
-                    //   → use HHT's timestamp (elapsed is slightly inflated but positive).
-                    // - If clocks are synced: HHT's timestamp is accurate.
                     var now = DateTimeOffset.UtcNow;
-                    var effectiveGunStart = racePayload.GunStartTime > now
-                        ? now   // HHT clock is ahead — use gate's time to prevent negative elapsed
-                        : racePayload.GunStartTime;
+
+                    // Compute HHT-to-Gate clock offset directly at receipt:
+                    //   offset = gateReceiveTime - hhtGunTime ≈ clockDrift + networkLatency
+                    //   Network latency on local Wi-Fi is ~10-50ms (negligible).
+                    // This converts the gun start from HHT's clock to Gate's clock so
+                    // elapsed = tagReadTime(Gate) - adjustedGunStart(Gate) is correct.
+                    var hhtToGateOffsetMs = (long)(now - racePayload.GunStartTime).TotalMilliseconds;
+                    var adjustedGunStart = racePayload.GunStartTime.AddMilliseconds(hhtToGateOffsetMs);
+
+                    // Safety: if adjusted somehow lands in the future, clamp to now
+                    if (adjustedGunStart > now)
+                        adjustedGunStart = now;
 
                     _db.RaceStartTimes.Add(new RaceStartTime
                     {
                         Id = Guid.NewGuid(),
                         HeatId = racePayload.HeatId,
                         HeatNumber = (int)racePayload.HeatNumber,
-                        GunStartTime = effectiveGunStart,
+                        GunStartTime = adjustedGunStart,
+                        OriginalGunStartTime = racePayload.GunStartTime,
                         SourceDeviceId = payload.DeviceId,
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],

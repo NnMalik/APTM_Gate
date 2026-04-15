@@ -6,6 +6,10 @@ using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Host integration: no-op when not running as the respective service type
+builder.Host.UseWindowsService();
+builder.Host.UseSystemd();
+
 // Infrastructure: DbContext, services
 builder.Services.AddInfrastructureServices(builder.Configuration);
 

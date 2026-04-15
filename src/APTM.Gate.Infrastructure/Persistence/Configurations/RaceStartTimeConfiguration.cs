@@ -15,6 +15,7 @@ public class RaceStartTimeConfiguration : IEntityTypeConfiguration<RaceStartTime
         builder.HasIndex(x => x.HeatId).IsUnique();
         builder.Property(x => x.HeatNumber).HasColumnName("heat_number").IsRequired();
         builder.Property(x => x.GunStartTime).HasColumnName("gun_start_time").IsRequired();
+        builder.Property(x => x.OriginalGunStartTime).HasColumnName("original_gun_start_time").IsRequired();
         builder.Property(x => x.SourceDeviceId).HasColumnName("source_device_id").IsRequired();
         builder.Property(x => x.CandidateIds).HasColumnName("candidate_ids").IsRequired();
         builder.Property(x => x.SourceClockOffsetMs).HasColumnName("source_clock_offset_ms").HasDefaultValue(0);
