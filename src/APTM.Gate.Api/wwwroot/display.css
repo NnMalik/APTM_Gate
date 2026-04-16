@@ -164,7 +164,10 @@ body {
 
 /* ── Main Layout ────────────────────────────────────────────────────────── */
 .main {
-    padding: clamp(16px, 1.5vw, 32px) clamp(24px, 2.4vw, 48px);
+    padding-top: clamp(28px, 3vw, 64px);
+    padding-bottom: clamp(16px, 1.5vw, 32px);
+    padding-left: clamp(24px, 2.4vw, 48px);
+    padding-right: clamp(24px, 2.4vw, 48px);
     display: flex;
     gap: 20px;
     flex: 1;
@@ -222,16 +225,16 @@ body {
     z-index: 1;
     background: var(--surface-alt);
     text-align: left;
-    padding: clamp(8px, 0.8vw, 16px) clamp(10px, 1vw, 20px);
-    font-size: clamp(11px, 1.1vw, 20px);
+    padding: clamp(8px, 0.84vw, 17px) clamp(10px, 1.05vw, 21px);
+    font-size: clamp(12px, 1.16vw, 21px);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-secondary);
     border-bottom: 1px solid var(--border);
 }
 .display-table td {
-    padding: clamp(8px, 0.8vw, 16px) clamp(10px, 1vw, 20px);
-    font-size: clamp(15px, 1.5vw, 28px);
+    padding: clamp(8px, 0.84vw, 17px) clamp(10px, 1.05vw, 21px);
+    font-size: clamp(16px, 1.58vw, 29px);
     border-bottom: 1px solid var(--border);
 }
 .display-table tr:last-child td { border-bottom: none; }
@@ -239,7 +242,7 @@ body {
 .display-table .col-pos {
     width: clamp(50px, 4vw, 80px);
     font-weight: 800;
-    font-size: clamp(18px, 1.8vw, 34px);
+    font-size: clamp(19px, 1.89vw, 36px);
     color: var(--accent);
 }
 .display-table .col-jacket {
@@ -251,13 +254,13 @@ body {
     padding: clamp(2px, 0.3vw, 6px) clamp(8px, 0.8vw, 16px);
     border-radius: 4px;
     font-weight: 700;
-    font-size: clamp(14px, 1.4vw, 26px);
+    font-size: clamp(15px, 1.47vw, 27px);
 }
 .display-table .col-time {
     font-family: 'Consolas', 'Courier New', monospace;
     font-weight: 600;
     color: var(--green);
-    font-size: clamp(15px, 1.5vw, 28px);
+    font-size: clamp(16px, 1.58vw, 29px);
 }
 .display-table .col-status {
     width: 100px;

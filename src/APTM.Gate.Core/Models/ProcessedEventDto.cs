@@ -10,6 +10,7 @@ public sealed class ProcessedEventDto
     public DateTimeOffset ReadTime { get; set; }
     public decimal? DurationSeconds { get; set; }
     public int? CheckpointSequence { get; set; }
+    public int? HeatNumber { get; set; }
     public bool IsFirstRead { get; set; }
     public string? CandidateName { get; set; }
     public int? JacketNumber { get; set; }

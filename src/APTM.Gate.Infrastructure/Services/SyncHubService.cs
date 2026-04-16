@@ -101,6 +101,7 @@ public sealed class SyncHubService : ISyncHubService
                 ReadTime = pe.ReadTime,
                 DurationSeconds = pe.DurationSeconds,
                 CheckpointSequence = pe.CheckpointSequence,
+                HeatNumber = pe.HeatNumber,
                 IsFirstRead = pe.IsFirstRead,
                 CandidateName = pe.CandidateName ?? "",
                 JacketNumber = pe.JacketNumber,
