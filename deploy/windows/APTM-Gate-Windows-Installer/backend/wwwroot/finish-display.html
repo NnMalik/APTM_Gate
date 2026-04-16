@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APTM — Finish Display</title>
+    <link rel="stylesheet" href="display.css">
+</head>
+<body>
+    <!-- ── Header ───────────────────────────────────────────────────────── -->
+    <div class="header">
+        <div class="header-left">
+            <h1>APTM Gate</h1>
+            <span class="gate-badge finish" id="gateBadge">FINISH</span>
+            <span class="live-indicator" id="liveIndicator">
+                <span class="live-dot"></span> Live Timing Active
+            </span>
+        </div>
+        <div class="header-center">
+            <div class="test-name" id="testName">--</div>
+            <div class="test-date" id="testDate">--</div>
+            <div style="display:flex; align-items:center; justify-content:center; gap:8px;">
+                <div class="event-name" id="eventName">--</div>
+                <span class="event-status-badge" id="eventStatus" style="display:none;">--</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="clock" id="clock">--:--:--</span>
+            <div>
+                <span class="connection-dot" id="sseDot"></span>
+                <span id="sseLabel">Connecting...</span>
+            </div>
+            <div id="readerStatus" class="reader-status disconnected" style="font-size: 0.75rem; margin-top: 2px;">Reader: --</div>
+            <div id="processingStatus" class="processing-status idle" style="font-size: 0.75rem; margin-top: 2px;">Processing: --</div>
+        </div>
+    </div>
+
+    <!-- ── Stats Bar ────────────────────────────────────────────────────── -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <div class="stat-value blue" id="statTotal">--</div>
+            <div class="stat-label">Total Candidates</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value cyan" id="statHeat">--</div>
+            <div class="stat-label">Current Group</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value green" id="statFinishers">0</div>
+            <div class="stat-label">Finishers</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value orange" id="statPresent">0</div>
+            <div class="stat-label">Present</div>
+        </div>
+    </div>
+
+    <!-- ── Main Content ─────────────────────────────────────────────────── -->
+    <div class="main">
+        <div class="main-left" style="flex:1; max-width:100%;">
+            <!-- Heat Timer -->
+            <div class="card" id="heatCard" style="display:none;">
+                <div class="card-header">Active Group</div>
+                <div class="card-body" style="overflow:visible;">
+                    <div class="heat-timer-section">
+                        <div class="heat-timer-value" id="heatTimer">00:00.000</div>
+                        <div class="heat-timer-label">Elapsed Time</div>
+                    </div>
+                    <div class="heat-info-row" style="padding-bottom:12px;">
+                        <span class="heat-info-label">Gun Start</span>
+                        <span class="heat-info-value" id="gunStartTime">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Finish Results Table -->
+            <div class="card flex-grow">
+                <div class="card-header">
+                    <span>Finish Results</span>
+                    <span class="card-count" id="resultCount">0</span>
+                </div>
+                <div class="card-body">
+                    <table class="display-table" id="resultsTable" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th>Pos</th>
+                                <th>Group</th>
+                                <th>Jacket</th>
+                                <th>Name</th>
+                                <th>Start</th>
+                                <th>Finish</th>
+                                <th>Total Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody"></tbody>
+                    </table>
+                    <div class="empty-state" id="resultsEmpty">
+                        <div class="empty-icon">&#127937;</div>
+                        <div class="empty-text">Waiting for finishers...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toast Container ──────────────────────────────────────────────── -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Hidden activity feed element (used by display.js addFeed, kept for compatibility) -->
+    <div id="activityFeed" style="display:none;"></div>
+    <span id="feedCount" style="display:none;">0</span>
+
+    <script src="display.js"></script>
+    <script>
+        // ── Finish Display Logic ───────────────────────────────────────────
+        let finisherCount = 0;
+        const finisherRows = []; // Track all rows for recalculation
+        const seenCandidateIds = new Set(); // Dedup across reload + SSE
+
+        // Called by display.js when finish reads are loaded (including empty on config switch)
+        function onFinishReadsLoaded(reads) {
+            // Clear table and dedup set on reload
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+            finisherCount = 0;
+            finisherRows.length = 0;
+            seenCandidateIds.clear();
+
+            // Reset to empty state — addFinisherRow will show the table if reads exist
+            document.getElementById('resultsEmpty').style.display = '';
+            document.getElementById('resultsTable').style.display = 'none';
+            Display.setText('resultCount', 0);
+            Display.setText('statFinishers', 0);
+
+            reads.forEach(r => addFinisherRow(r, false));
+        }
+
+        // Called by display.js on tag_event SSE
+        function onTagEvent(data) {
+            if (data.event_type === 'finish' || Display.state.gateRole === 'finish') {
+                addFinisherRow({
+                    candidateId: data.candidate_id,
+                    name: data.name,
+                    jacketNumber: data.jacket_number,
+                    tagEPC: data.tag_epc,
+                    readTime: data.read_time,
+                    elapsedSeconds: data.duration_seconds,
+                    heatNumber: data.heat_number,
+                }, true);
+            }
+            // No toast for tag events — they're in the table
+        }
+
+        // Called by display.js on race_start SSE
+        function onRaceStart(data) {
+            Display.setText('statHeat', data.heat_number ?? '--');
+            Display.showToast('start', `Group ${data.heat_number} — Gun fired`);
+
+            // Clear table for the new heat — candidates will reappear as they cross
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+            finisherCount = 0;
+            finisherRows.length = 0;
+            seenCandidateIds.clear();
+            document.getElementById('resultsEmpty').style.display = '';
+            document.getElementById('resultsTable').style.display = 'none';
+            Display.setText('resultCount', 0);
+            Display.setText('statFinishers', 0);
+        }
+
+        function onSyncData(data) {
+            Display.showToast('sync', `${data.data_type} from ${data.source_device_code || 'HHT'}`);
+            if (data.data_type === 'attendance') {
+                setTimeout(Display.loadDisplayData, 300);
+            }
+        }
+
+        function addFinisherRow(read, animate) {
+            // Dedup by candidateId
+            const cid = read.candidateId;
+            if (cid && seenCandidateIds.has(cid)) return;
+            if (cid) seenCandidateIds.add(cid);
+
+            const tbody = document.getElementById('resultsBody');
+            finisherCount++;
+
+            document.getElementById('resultsEmpty').style.display = 'none';
+            document.getElementById('resultsTable').style.display = 'table';
+
+            const pos = read.position || finisherCount;
+            const readTime = read.readTime ? new Date(read.readTime) : null;
+            const hasStartTime = Display.state.gunStartTime != null;
+
+            // Jacket: prefer jacketNumber, fall back to tag EPC
+            const jacket = read.jacketNumber ?? read.tagEPC ?? '--';
+
+            // Compute elapsed
+            let elapsedStr = '--';
+            if (read.elapsedSeconds != null && read.elapsedSeconds < 86400) {
+                elapsedStr = Display.formatDuration(read.elapsedSeconds);
+            } else if (hasStartTime && readTime) {
+                const elapsed = (readTime.getTime() - Display.state.gunStartTime.getTime()) / 1000;
+                if (elapsed > 0 && elapsed < 86400) {
+                    elapsedStr = Display.formatDuration(elapsed);
+                }
+            }
+
+            const tr = document.createElement('tr');
+            if (animate) tr.className = 'new-row';
+            tr.dataset.readTime = readTime ? readTime.toISOString() : '';
+
+            const group = read.heatNumber ?? '--';
+
+            // Format start and finish times as HH:mm:ss.SSS
+            const startStr = Display.state.gunStartTime
+                ? Display.formatClockTime(Display.state.gunStartTime)
+                : '--';
+            const finishStr = readTime
+                ? Display.formatClockTime(readTime)
+                : '--';
+
+            tr.innerHTML =
+                `<td class="col-pos">${pos}</td>` +
+                `<td>${group}</td>` +
+                `<td class="col-jacket"><span>${jacket}</span></td>` +
+                `<td>${read.name || read.candidateId?.substring(0, 8) || '--'}</td>` +
+                `<td class="col-time col-start">${startStr}</td>` +
+                `<td class="col-time col-finish">${finishStr}</td>` +
+                `<td class="col-time col-elapsed">${elapsedStr}</td>`;
+
+            tbody.appendChild(tr);
+            finisherRows.push(tr);
+
+            Display.setText('resultCount', finisherCount);
+            Display.setText('statFinishers', finisherCount);
+
+            // Scroll to show new row
+            if (animate) tr.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // Recalculate all elapsed times and update start times when gun start time arrives
+        function recalculateElapsed() {
+            if (!Display.state.gunStartTime) return;
+
+            const startStr = Display.formatClockTime(Display.state.gunStartTime);
+
+            finisherRows.forEach(tr => {
+                const isoStr = tr.dataset.readTime;
+                if (!isoStr) return;
+
+                // Update start time cell
+                const startCell = tr.querySelector('.col-start');
+                if (startCell) startCell.textContent = startStr;
+
+                // Recalculate elapsed
+                const readTime = new Date(isoStr);
+                const elapsed = (readTime.getTime() - Display.state.gunStartTime.getTime()) / 1000;
+                const elapsedCell = tr.querySelector('.col-elapsed');
+                if (elapsedCell && elapsed > 0) {
+                    elapsedCell.textContent = Display.formatDuration(elapsed);
+                }
+            });
+        }
+    </script>
+</body>
+</html>

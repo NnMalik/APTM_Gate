@@ -10,6 +10,7 @@ public sealed class DisplayData
     public string TestInstanceName { get; set; } = default!;
     public string ScheduledDate { get; set; } = default!;
     public int TotalCandidates { get; set; }
+    public int TotalGroups { get; set; }
     public ActiveHeatData? ActiveHeat { get; set; }
     public List<FinishReadData> FinishReads { get; set; } = [];
     public List<StartReadData> StartReads { get; set; } = [];

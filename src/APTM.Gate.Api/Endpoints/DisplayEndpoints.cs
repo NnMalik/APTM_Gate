@@ -37,6 +37,12 @@ public static class DisplayEndpoints
             var activeEventId = gateConfig.ActiveEventId;
             var totalCandidates = await db.Candidates.CountAsync(ct);
 
+            // Total groups/batches that have started (distinct heats received via race_start push)
+            var totalGroups = await db.RaceStartTimes
+                .Select(r => r.HeatNumber)
+                .Distinct()
+                .CountAsync(ct);
+
             // Get latest race start for active heat info
             var latestRaceStart = await db.RaceStartTimes
                 .OrderByDescending(r => r.ReceivedAt)
@@ -119,6 +125,7 @@ public static class DisplayEndpoints
                 TestInstanceName = gateConfig.TestInstanceName,
                 ScheduledDate = gateConfig.ScheduledDate.ToString("yyyy-MM-dd"),
                 TotalCandidates = totalCandidates,
+                TotalGroups = totalGroups,
                 ActiveHeat = activeHeat,
                 FinishReads = finishReads,
                 StartReads = startReads,

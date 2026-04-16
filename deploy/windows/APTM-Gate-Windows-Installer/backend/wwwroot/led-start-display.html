@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- Fixed 240x320 portrait viewport for P4 LED panel -->
+    <meta name="viewport" content="width=240, initial-scale=1.0, user-scalable=no">
+    <title>APTM — Start LED</title>
+    <style>
+        /* ========================================================================
+           Purpose-built for a 240 x 320 portrait P4 LED panel.
+           White background, black text — high contrast under indoor LED.
+           Does NOT load display.css so the TV layouts stay untouched.
+           ======================================================================== */
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            width: 240px;
+            height: 320px;
+            background: #ffffff;
+            color: #000000;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            padding: 10px 12px;
+            gap: 8px;
+        }
+
+        /* ── Connection indicator ── */
+        .conn-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .conn-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #d1d5db;           /* grey when disconnected */
+            flex-shrink: 0;
+        }
+        .conn-dot.connected { background: #22c55e; }   /* green when live */
+
+        /* ── Test name ── */
+        .test-name {
+            font-size: 20px;
+            font-weight: 800;
+            line-height: 1.1;
+            letter-spacing: -0.3px;
+            /* 2-line clamp so long names don't overflow the LED */
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* ── Two-up stats (Participant / Present) ── */
+        .stats-row {
+            display: flex;
+            justify-content: space-around;
+            padding: 4px 0 2px 0;
+        }
+        .stat {
+            text-align: center;
+            flex: 1;
+        }
+        .stat-value {
+            font-size: 28px;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .stat-label {
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 4px;
+            color: #374151;
+        }
+
+        /* ── Elapsed timer (big centerpiece) ── */
+        .timer-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .timer {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 44px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            line-height: 1;
+            text-align: center;
+            color: #000;
+        }
+
+        /* ── Groups/Batches (bottom) ── */
+        .groups {
+            text-align: center;
+            padding-bottom: 2px;
+        }
+        .groups-value {
+            font-size: 22px;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .groups-label {
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 3px;
+            color: #374151;
+        }
+    </style>
+</head>
+<body>
+    <!-- Connection -->
+    <div class="conn-row">
+        <span id="sseDot" class="conn-dot"></span>
+        <span id="sseLabel">Connecting...</span>
+    </div>
+
+    <!-- Test name -->
+    <div class="test-name" id="testName">--</div>
+
+    <!-- Participant / Present -->
+    <div class="stats-row">
+        <div class="stat">
+            <div class="stat-value" id="statTotal">--</div>
+            <div class="stat-label">Total Paticiptent</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="statPresent">0</div>
+            <div class="stat-label">Total Present</div>
+        </div>
+    </div>
+
+    <!--
+      Heat card — display.js toggles this between block/none.
+      Starts hidden; becomes visible when race_start arrives (or initial data has an active heat).
+    -->
+    <div class="timer-wrap" id="heatCard" style="display:none;">
+        <div class="timer" id="heatTimer">00:00.000</div>
+    </div>
+
+    <!-- Placeholder so layout doesn't collapse before race_start -->
+    <div class="timer-wrap" id="timerPlaceholder">
+        <div class="timer">00:00.000</div>
+    </div>
+
+    <!-- Total Groups / Batches -->
+    <div class="groups">
+        <div class="groups-value" id="statGroups">0</div>
+        <div class="groups-label">Total Group/Batches</div>
+    </div>
+
+    <!-- Hidden elements display.js may touch (kept so setText/setLiveIndicator are harmless no-ops) -->
+    <span id="testDate" style="display:none;"></span>
+    <span id="eventName" style="display:none;"></span>
+    <span id="clock" style="display:none;"></span>
+    <span id="readerStatus" style="display:none;"></span>
+    <span id="processingStatus" style="display:none;"></span>
+    <span id="feedCount" style="display:none;"></span>
+    <div id="activityFeed" style="display:none;"></div>
+
+    <script src="display.js"></script>
+    <script>
+        // ── LED Start Display Logic ─────────────────────────────────────────
+        // Swap the placeholder out once the real heat timer goes live.
+        const heatCard = document.getElementById('heatCard');
+        const placeholder = document.getElementById('timerPlaceholder');
+
+        // Watch heatCard for display changes (display.js toggles it via applyHeat/clearHeat).
+        const cardObserver = new MutationObserver(() => {
+            const live = heatCard.style.display !== 'none';
+            placeholder.style.display = live ? 'none' : 'flex';
+        });
+        cardObserver.observe(heatCard, { attributes: true, attributeFilter: ['style'] });
+
+        // Re-fetch display data when HHT pushes attendance/race_start sync so counts update.
+        function onSyncData(data) {
+            if (data.data_type === 'attendance' || data.data_type === 'race_start') {
+                setTimeout(Display.loadDisplayData, 300);
+            }
+        }
+
+        // race_start arrives via display.js's built-in SSE handler — it already:
+        //   - sets state.gunStartTime
+        //   - shows #heatCard
+        //   - starts the heat timer
+        // We re-pull display-data after a short delay to refresh the group count.
+        function onRaceStart(data) {
+            setTimeout(Display.loadDisplayData, 300);
+        }
+    </script>
+</body>
+</html>
