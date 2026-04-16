@@ -75,9 +75,9 @@ const Display = (() => {
             setText('statNotScanned', data.attendance.totalNotScanned ?? 0);
         }
 
-        // Finish reads (finish display)
-        if (data.finishReads && data.finishReads.length > 0 && typeof onFinishReadsLoaded === 'function') {
-            onFinishReadsLoaded(data.finishReads);
+        // Finish reads (finish display) — always call to clear stale data on config switch
+        if (typeof onFinishReadsLoaded === 'function') {
+            onFinishReadsLoaded(data.finishReads || []);
         }
 
         // Start/attendance reads (start display)
@@ -110,7 +110,7 @@ const Display = (() => {
             const displayTime = heat.originalGunStartTime
                 ? new Date(heat.originalGunStartTime)
                 : state.gunStartTime;
-            setText('gunStartTime', displayTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
+            setText('gunStartTime', formatClockTime(displayTime));
             setLiveIndicator(true);
             startHeatTimer();
         }
@@ -196,6 +196,16 @@ const Display = (() => {
         return `${String(m).padStart(2, '0')}:${s.padStart(6, '0')}`;
     }
 
+    function formatClockTime(date) {
+        if (!date) return '--';
+        const d = (date instanceof Date) ? date : new Date(date);
+        const h = String(d.getHours()).padStart(2, '0');
+        const m = String(d.getMinutes()).padStart(2, '0');
+        const s = String(d.getSeconds()).padStart(2, '0');
+        const ms = String(d.getMilliseconds()).padStart(3, '0');
+        return `${h}:${m}:${s}.${ms}`;
+    }
+
     // ── SSE Connection ──────────────────────────────────────────────────────
     function connectSSE() {
         if (state.sseSource) { state.sseSource.close(); }
@@ -223,7 +233,7 @@ const Display = (() => {
                 ? new Date(d.original_gun_start_time)
                 : state.gunStartTime;
             setText('heatNumber', d.heat_number ?? '--');
-            setText('gunStartTime', displayTime.toLocaleTimeString('en-IN', { hour12: false, fractionalSecondDigits: 3 }));
+            setText('gunStartTime', formatClockTime(displayTime));
 
             const timerCard = document.getElementById('heatCard');
             if (timerCard) timerCard.style.display = 'block';
@@ -331,7 +341,7 @@ const Display = (() => {
     }
 
     // Public API
-    return { init, state, formatDuration, formatElapsed, addFeed, showToast, setText, loadDisplayData };
+    return { init, state, formatDuration, formatElapsed, formatClockTime, addFeed, showToast, setText, loadDisplayData };
 })();
 
 // Auto-init on DOMContentLoaded

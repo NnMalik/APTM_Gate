@@ -144,6 +144,18 @@ public sealed class GateConfigService : IGateConfigService
 
             await _db.SaveChangesAsync(ct);
 
+            // Backfill denormalized candidate info on existing ProcessedEvents
+            // (fixes null jacket_number / candidate_name from events processed before candidate data was available)
+            await _db.Database.ExecuteSqlRawAsync(@"
+                UPDATE processed_events
+                SET candidate_name = c.name,
+                    jacket_number  = c.jacket_number
+                FROM candidates c
+                WHERE processed_events.candidate_id = c.candidate_id
+                  AND (processed_events.jacket_number IS NULL
+                       OR processed_events.candidate_name IS NULL
+                       OR processed_events.candidate_name = '')", ct);
+
             // Upsert gate_config — deactivate old, insert new
             await _db.GateConfigs
                 .Where(g => g.IsActive)

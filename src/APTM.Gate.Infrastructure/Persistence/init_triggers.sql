@@ -17,7 +17,8 @@ BEGIN
         'duration_seconds', NEW.duration_seconds,
         'is_first_read', NEW.is_first_read,
         'jacket_number', NEW.jacket_number,
-        'name', NEW.candidate_name
+        'name', NEW.candidate_name,
+        'heat_number', NEW.heat_number
     )::text);
     RETURN NEW;
 END;

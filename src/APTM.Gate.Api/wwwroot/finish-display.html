@@ -66,10 +66,6 @@
                         <div class="heat-timer-value" id="heatTimer">00:00.000</div>
                         <div class="heat-timer-label">Elapsed Time</div>
                     </div>
-                    <div class="heat-info-row">
-                        <span class="heat-info-label">Group #</span>
-                        <span class="heat-info-value" id="heatNumber">--</span>
-                    </div>
                     <div class="heat-info-row" style="padding-bottom:12px;">
                         <span class="heat-info-label">Gun Start</span>
                         <span class="heat-info-value" id="gunStartTime">--</span>
@@ -91,6 +87,8 @@
                                 <th>Group</th>
                                 <th>Jacket</th>
                                 <th>Name</th>
+                                <th>Start</th>
+                                <th>Finish</th>
                                 <th>Total Time</th>
                             </tr>
                         </thead>
@@ -119,7 +117,7 @@
         const finisherRows = []; // Track all rows for recalculation
         const seenCandidateIds = new Set(); // Dedup across reload + SSE
 
-        // Called by display.js when initial finish reads are loaded
+        // Called by display.js when finish reads are loaded (including empty on config switch)
         function onFinishReadsLoaded(reads) {
             // Clear table and dedup set on reload
             const tbody = document.getElementById('resultsBody');
@@ -127,6 +125,13 @@
             finisherCount = 0;
             finisherRows.length = 0;
             seenCandidateIds.clear();
+
+            // Reset to empty state — addFinisherRow will show the table if reads exist
+            document.getElementById('resultsEmpty').style.display = '';
+            document.getElementById('resultsTable').style.display = 'none';
+            Display.setText('resultCount', 0);
+            Display.setText('statFinishers', 0);
+
             reads.forEach(r => addFinisherRow(r, false));
         }
 
@@ -140,6 +145,7 @@
                     tagEPC: data.tag_epc,
                     readTime: data.read_time,
                     elapsedSeconds: data.duration_seconds,
+                    heatNumber: data.heat_number,
                 }, true);
             }
             // No toast for tag events — they're in the table
@@ -205,11 +211,21 @@
 
             const group = read.heatNumber ?? '--';
 
+            // Format start and finish times as HH:mm:ss.SSS
+            const startStr = Display.state.gunStartTime
+                ? Display.formatClockTime(Display.state.gunStartTime)
+                : '--';
+            const finishStr = readTime
+                ? Display.formatClockTime(readTime)
+                : '--';
+
             tr.innerHTML =
                 `<td class="col-pos">${pos}</td>` +
                 `<td>${group}</td>` +
                 `<td class="col-jacket"><span>${jacket}</span></td>` +
                 `<td>${read.name || read.candidateId?.substring(0, 8) || '--'}</td>` +
+                `<td class="col-time col-start">${startStr}</td>` +
+                `<td class="col-time col-finish">${finishStr}</td>` +
                 `<td class="col-time col-elapsed">${elapsedStr}</td>`;
 
             tbody.appendChild(tr);
@@ -222,14 +238,21 @@
             if (animate) tr.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
-        // Recalculate all elapsed times when gun start time arrives
+        // Recalculate all elapsed times and update start times when gun start time arrives
         function recalculateElapsed() {
             if (!Display.state.gunStartTime) return;
+
+            const startStr = Display.formatClockTime(Display.state.gunStartTime);
 
             finisherRows.forEach(tr => {
                 const isoStr = tr.dataset.readTime;
                 if (!isoStr) return;
 
+                // Update start time cell
+                const startCell = tr.querySelector('.col-start');
+                if (startCell) startCell.textContent = startStr;
+
+                // Recalculate elapsed
                 const readTime = new Date(isoStr);
                 const elapsed = (readTime.getTime() - Display.state.gunStartTime.getTime()) / 1000;
                 const elapsedCell = tr.querySelector('.col-elapsed');

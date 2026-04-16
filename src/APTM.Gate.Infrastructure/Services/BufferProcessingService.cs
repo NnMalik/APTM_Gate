@@ -147,6 +147,13 @@ public sealed class BufferProcessingService : IBufferProcessingService
 
             candidateMap.TryGetValue(candidateId, out var candidate);
 
+            // Fallback: if candidate not in preloaded batch, load directly
+            if (candidate == null)
+            {
+                candidate = await _db.Candidates.FindAsync(new object[] { candidateId }, ct);
+                if (candidate != null) candidateMap[candidateId] = candidate;
+            }
+
             var processedEvent = new ProcessedEvent
             {
                 CandidateId = candidateId,
