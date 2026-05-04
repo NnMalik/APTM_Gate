@@ -6,18 +6,18 @@
    ============================================================================ */
 
 :root {
-    --bg: #0a0a0f;
-    --surface: #141420;
-    --surface-alt: #1a1a2e;
-    --border: #2a2a3a;
-    --text: #e0e0e8;
-    --text-secondary: #8888a0;
-    --accent: #4a90d9;
-    --green: #22c55e;
-    --red: #ef4444;
-    --yellow: #eab308;
-    --orange: #f97316;
-    --cyan: #06b6d4;
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --surface-alt: #eef2f7;
+    --border: #cbd5e1;
+    --text: #0f172a;
+    --text-secondary: #475569;
+    --accent: #1d4ed8;
+    --green: #15803d;
+    --red: #b91c1c;
+    --yellow: #a16207;
+    --orange: #c2410c;
+    --cyan: #0e7490;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -36,11 +36,12 @@ body {
 .header {
     background: var(--surface);
     border-bottom: 2px solid var(--border);
-    padding: clamp(12px, 1.2vw, 24px) clamp(24px, 2.4vw, 48px);
+    padding: clamp(24px, 2.2vw, 44px) clamp(24px, 2.4vw, 48px) clamp(16px, 1.5vw, 28px);
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
 
 .header-left {
@@ -63,8 +64,8 @@ body {
     text-transform: uppercase;
     letter-spacing: 1px;
 }
-.gate-badge.start { background: var(--green); color: #000; }
-.gate-badge.checkpoint { background: var(--yellow); color: #000; }
+.gate-badge.start { background: var(--green); color: #fff; }
+.gate-badge.checkpoint { background: var(--yellow); color: #fff; }
 .gate-badge.finish { background: var(--accent); color: #fff; }
 .gate-badge.unconfigured { background: var(--red); color: #fff; }
 
@@ -83,7 +84,7 @@ body {
 .header-center .event-name {
     font-size: clamp(18px, 1.8vw, 34px);
     font-weight: 700;
-    color: #38bdf8;
+    color: #0369a1;
 }
 .event-status-badge {
     padding: clamp(2px, 0.3vw, 6px) clamp(8px, 0.8vw, 16px);
@@ -184,6 +185,7 @@ body {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 .card.flex-grow { flex: 1; min-height: 0; }
 
@@ -280,7 +282,7 @@ body {
     animation: rowFlash 2s ease-out;
 }
 @keyframes rowFlash {
-    0% { background: rgba(74, 144, 217, 0.4); }
+    0% { background: rgba(29, 78, 216, 0.18); }
     100% { background: transparent; }
 }
 
@@ -318,7 +320,7 @@ body {
     align-items: center;
     gap: 8px;
     padding: clamp(4px, 0.4vw, 10px) clamp(10px, 1vw, 20px);
-    background: rgba(34, 197, 94, 0.15);
+    background: #dcfce7;
     border: 1px solid var(--green);
     border-radius: 6px;
     font-size: clamp(12px, 1.1vw, 20px);
@@ -361,9 +363,9 @@ body {
     margin: 0 6px;
 }
 .feed-type.tag { background: var(--accent); color: #fff; }
-.feed-type.start { background: var(--green); color: #000; }
-.feed-type.sync { background: var(--orange); color: #000; }
-.feed-type.config { background: var(--yellow); color: #000; }
+.feed-type.start { background: var(--green); color: #fff; }
+.feed-type.sync { background: var(--orange); color: #fff; }
+.feed-type.config { background: var(--yellow); color: #fff; }
 
 @keyframes feedSlide {
     from { opacity: 0; transform: translateY(-10px); }
@@ -398,7 +400,7 @@ body {
     max-width: clamp(320px, 25vw, 480px);
 }
 .toast {
-    background: rgba(20, 20, 32, 0.95);
+    background: #ffffff;
     border: 1px solid var(--border);
     border-left: 4px solid var(--accent);
     border-radius: 6px;
@@ -407,7 +409,7 @@ body {
     color: var(--text);
     animation: toastIn 0.3s ease-out;
     pointer-events: auto;
-    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
 }
 .toast.fade-out {
     animation: toastOut 0.4s ease-in forwards;
@@ -429,9 +431,9 @@ body {
     text-transform: uppercase;
     margin: 0 6px;
 }
-.toast .toast-type.start { background: var(--green); color: #000; }
-.toast .toast-type.sync { background: var(--orange); color: #000; }
-.toast .toast-type.config { background: var(--yellow); color: #000; }
+.toast .toast-type.start { background: var(--green); color: #fff; }
+.toast .toast-type.sync { background: var(--orange); color: #fff; }
+.toast .toast-type.config { background: var(--yellow); color: #fff; }
 @keyframes toastIn {
     from { opacity: 0; transform: translateX(40px); }
     to { opacity: 1; transform: translateX(0); }

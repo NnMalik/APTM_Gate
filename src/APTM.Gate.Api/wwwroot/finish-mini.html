@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=480, initial-scale=1.0">
+    <title>APTM — Finish (Mini)</title>
+    <style>
+        /* ============================================================
+           Compact Finish Display — fixed 480x320 viewport
+           No clamp/vw — every dimension in absolute pixels.
+           ============================================================ */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            width: 480px;
+            height: 320px;
+            overflow: hidden;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #ffffff;
+            color: #000000;
+        }
+
+        /* ── Header (52px) ───────────────────────────────────────── */
+        .header {
+            height: 52px;
+            display: grid;
+            grid-template-columns: 90px 1fr 50px;
+            align-items: center;
+            padding: 4px 8px;
+            border-bottom: 1px solid #000;
+        }
+        .header-left {
+            font-weight: 700;
+            line-height: 1.15;
+        }
+        .header-left .date { font-size: 14px; }
+        .header-left .clock { font-size: 14px; }
+
+        .header-center {
+            text-align: center;
+            font-size: 22px;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .header-right {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: stretch;
+        }
+        .indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .indicator .label { width: 10px; }
+        .indicator .bar {
+            flex: 1;
+            height: 14px;
+            background: #b91c1c; /* red by default */
+            border: 1px solid #000;
+        }
+        .indicator .bar.ok { background: #15803d; } /* green */
+
+        /* ── Stats Bar (54px) ───────────────────────────────────── */
+        .stats {
+            height: 54px;
+            background: #000;
+            color: #fff;
+            display: grid;
+            grid-template-columns: 60px 60px 1fr 70px 70px;
+            align-items: center;
+            padding: 0 10px;
+        }
+        .stat {
+            text-align: center;
+            line-height: 1.05;
+        }
+        .stat .v {
+            font-size: 22px;
+            font-weight: 700;
+        }
+        .stat .l {
+            font-size: 11px;
+            font-weight: 400;
+            opacity: 0.85;
+        }
+        .stat-timer {
+            text-align: center;
+            font-size: 30px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 1px;
+        }
+
+        /* ── Card Grid (214px) ──────────────────────────────────── */
+        .grid {
+            height: 214px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 6px;
+            padding: 8px;
+        }
+        .card {
+            border: 2px solid #000;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .card .jacket {
+            flex: 1.4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 1px;
+        }
+        .card .time {
+            flex: 1;
+            border-top: 2px solid #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .card.empty .jacket,
+        .card.empty .time {
+            color: #cbd5e1;
+        }
+
+        /* New-card flash animation */
+        @keyframes flash {
+            0%   { background: #fde68a; }
+            100% { background: #ffffff; }
+        }
+        .card.new-card { animation: flash 0.8s ease-out; }
+    </style>
+</head>
+<body>
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="header">
+        <div class="header-left">
+            <div class="date" id="hdrDate">--/--/----</div>
+            <div class="clock" id="clock">--:--:--</div>
+        </div>
+        <div class="header-center" id="testName">--</div>
+        <div class="header-right">
+            <div class="indicator">
+                <span class="label">R</span>
+                <span class="bar" id="readerBar"></span>
+            </div>
+            <div class="indicator">
+                <span class="label">G</span>
+                <span class="bar" id="gateBar"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Stats Bar ───────────────────────────────────────────── -->
+    <div class="stats">
+        <div class="stat"><div class="v" id="statTotal">--</div><div class="l">Total</div></div>
+        <div class="stat"><div class="v" id="statPresent">--</div><div class="l">Present</div></div>
+        <div class="stat-timer" id="heatTimer">00:00:000</div>
+        <div class="stat"><div class="v" id="statCompleted">0</div><div class="l">Completed</div></div>
+        <div class="stat"><div class="v" id="statRemaining">0</div><div class="l">Remaining</div></div>
+    </div>
+
+    <!-- ── 4x2 Card Grid ───────────────────────────────────────── -->
+    <div class="grid" id="cardGrid">
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+        <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
+    </div>
+
+    <!-- Hidden elements required by display.js (feed/toast no-ops) -->
+    <div id="activityFeed" style="display:none;"></div>
+    <span id="feedCount" style="display:none;">0</span>
+    <div id="toastContainer" style="display:none;"></div>
+    <span id="liveIndicator" style="display:none;"></span>
+    <span id="sseDot" style="display:none;"></span>
+    <span id="sseLabel" style="display:none;"></span>
+    <span id="readerStatus" style="display:none;"></span>
+    <span id="processingStatus" style="display:none;"></span>
+    <span id="testDate" style="display:none;"></span>
+    <span id="eventName" style="display:none;"></span>
+    <span id="eventStatus" style="display:none;"></span>
+    <span id="gateBadge" style="display:none;"></span>
+    <span id="statHeat" style="display:none;"></span>
+    <span id="statFinishers" style="display:none;"></span>
+    <span id="statGroups" style="display:none;"></span>
+    <span id="statAbsent" style="display:none;"></span>
+    <span id="statNotScanned" style="display:none;"></span>
+    <span id="heatNumber" style="display:none;"></span>
+    <span id="gunStartTime" style="display:none;"></span>
+    <div id="heatCard" style="display:none;"></div>
+
+    <script src="display.js"></script>
+    <script>
+        // ── Mini Display Logic ─────────────────────────────────────
+        // FIFO ring of the latest 8 finishers. Index 0 = newest.
+        const MAX_CARDS = 8;
+        const cards = []; // { jacket, elapsedSeconds, readTime, candidateId }
+        const seen = new Set(); // dedup by candidateId
+        let presentCount = 0;
+        let completedCount = 0;
+
+        // ── Override display.js's clock so we can show a 12-hour-ish format ──
+        // The shared clock auto-runs on init. We piggy-back: just keep it formatted hh:mm:ss.
+
+        // ── Hooks invoked by display.js ─────────────────────────────
+        function onFinishReadsLoaded(reads) {
+            // Replace cards with the latest 8 (newest first)
+            cards.length = 0;
+            seen.clear();
+            completedCount = 0;
+
+            // FinishReads come ordered oldest -> newest from server; reverse so newest first
+            const sorted = [...reads].sort((a, b) =>
+                new Date(b.readTime) - new Date(a.readTime));
+
+            for (const r of sorted) {
+                if (cards.length >= MAX_CARDS) break;
+                if (r.candidateId && seen.has(r.candidateId)) continue;
+                if (r.candidateId) seen.add(r.candidateId);
+                cards.push({
+                    jacket: r.jacketNumber ?? r.tagEPC ?? '----',
+                    elapsedSeconds: r.elapsedSeconds,
+                    readTime: r.readTime,
+                    candidateId: r.candidateId,
+                });
+            }
+            completedCount = reads.length;
+            renderCards();
+            updateStats();
+        }
+
+        function onTagEvent(data) {
+            // Only handle finish reads on this display
+            if (data.event_type && data.event_type !== 'finish'
+                && Display.state.gateRole !== 'finish') return;
+
+            if (data.candidate_id && seen.has(data.candidate_id)) return;
+            if (data.candidate_id) seen.add(data.candidate_id);
+
+            cards.unshift({
+                jacket: data.jacket_number ?? data.tag_epc ?? '----',
+                elapsedSeconds: data.duration_seconds,
+                readTime: data.read_time,
+                candidateId: data.candidate_id,
+                isNew: true,
+            });
+            if (cards.length > MAX_CARDS) cards.length = MAX_CARDS;
+
+            completedCount++;
+            renderCards();
+            updateStats();
+        }
+
+        function onRaceStart(data) {
+            // Clear cards for the new heat
+            cards.length = 0;
+            seen.clear();
+            completedCount = 0;
+            renderCards();
+            updateStats();
+        }
+
+        function onSyncData(data) {
+            // Refresh display data on attendance changes (Present count may move)
+            if (data.data_type === 'attendance') {
+                setTimeout(Display.loadDisplayData, 300);
+            }
+        }
+
+        // ── Rendering ───────────────────────────────────────────────
+        function renderCards() {
+            const grid = document.getElementById('cardGrid');
+            const slots = grid.children;
+            for (let i = 0; i < MAX_CARDS; i++) {
+                const slot = slots[i];
+                const data = cards[i];
+                if (!data) {
+                    slot.classList.add('empty');
+                    slot.classList.remove('new-card');
+                    slot.children[0].textContent = '----';
+                    slot.children[1].textContent = '00:00:000';
+                    continue;
+                }
+                slot.classList.remove('empty');
+
+                // Jacket (zero-pad to 4 digits if numeric)
+                const jacketStr = (typeof data.jacket === 'number')
+                    ? String(data.jacket).padStart(4, '0')
+                    : String(data.jacket);
+                slot.children[0].textContent = jacketStr;
+
+                // Elapsed time
+                slot.children[1].textContent = formatElapsedColon(getElapsed(data));
+
+                // Flash newest only on first render after insertion
+                if (data.isNew && i === 0) {
+                    slot.classList.remove('new-card');
+                    void slot.offsetWidth; // force reflow to restart animation
+                    slot.classList.add('new-card');
+                    data.isNew = false;
+                }
+            }
+        }
+
+        function getElapsed(data) {
+            if (data.elapsedSeconds != null && data.elapsedSeconds < 86400) {
+                return Number(data.elapsedSeconds);
+            }
+            if (Display.state.gunStartTime && data.readTime) {
+                const e = (new Date(data.readTime).getTime()
+                          - Display.state.gunStartTime.getTime()) / 1000;
+                if (e > 0 && e < 86400) return e;
+            }
+            return null;
+        }
+
+        // Format "MM:SS:mmm" (matches reference image)
+        function formatElapsedColon(seconds) {
+            if (seconds == null) return '--:--:---';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            const ms = Math.round((seconds - Math.floor(seconds)) * 1000);
+            return String(m).padStart(2, '0') + ':' +
+                   String(s).padStart(2, '0') + ':' +
+                   String(ms).padStart(3, '0');
+        }
+
+        function updateStats() {
+            const total = parseInt(document.getElementById('statTotal').textContent, 10);
+            Display.setText('statCompleted', completedCount);
+            const remaining = Math.max(0, presentCount - completedCount);
+            Display.setText('statRemaining', remaining);
+        }
+
+        // ── Live big timer (own loop, format MM:SS:mmm) ─────────────
+        setInterval(() => {
+            const el = document.getElementById('heatTimer');
+            if (!el) return;
+            if (!Display.state.gunStartTime) {
+                el.textContent = '00:00:000';
+                return;
+            }
+            const elapsed = (Date.now() - Display.state.gunStartTime.getTime()) / 1000;
+            el.textContent = elapsed < 0 ? '00:00:000' : formatElapsedColon(elapsed);
+        }, 50);
+
+        // ── Refresh header chrome (date, title, R/G, Total, Present) ──
+        // We re-fetch /gate/display-data ourselves to update the visible
+        // header and stats — display.js writes to hidden mirror elements.
+        async function refreshChrome() {
+            try {
+                const res = await fetch('/gate/display-data');
+                if (!res.ok) return;
+                const d = await res.json();
+
+                // Date → dd/MM/yyyy
+                if (d.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(d.scheduledDate)) {
+                    const [y, m, da] = d.scheduledDate.split('-');
+                    document.getElementById('hdrDate').textContent = `${da}/${m}/${y}`;
+                }
+
+                // Title — prefer active event, else test instance
+                const title = d.activeEventName || d.testInstanceName || '--';
+                document.getElementById('testName').textContent = title;
+
+                // R bar (reader connected) and G bar (processing active)
+                document.getElementById('readerBar').classList.toggle('ok', !!d.readerConnected);
+                document.getElementById('gateBar').classList.toggle('ok', !!d.isProcessingActive);
+
+                // Stats
+                Display.setText('statTotal', d.totalCandidates ?? '--');
+                presentCount = d.attendance ? (d.attendance.totalPresent ?? 0) : 0;
+                Display.setText('statPresent', presentCount);
+                updateStats();
+            } catch (e) { /* ignore */ }
+        }
+
+        // Initial fetch + on connection events
+        window.addEventListener('load', refreshChrome);
+        // Re-fetch chrome whenever display.js fires its config_updated handler;
+        // it already calls loadDisplayData, but we also need to refresh our header.
+        const _origLoad = Display.loadDisplayData;
+        Display.loadDisplayData = async function () {
+            await _origLoad.apply(this, arguments);
+            refreshChrome();
+        };
+
+        // Re-render cards every second so live elapsed updates if we ever
+        // lacked elapsedSeconds (rare — server normally provides it).
+        setInterval(renderCards, 1000);
+    </script>
+</body>
+</html>
