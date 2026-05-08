@@ -38,11 +38,26 @@
 
         .header-center {
             text-align: center;
-            font-size: 22px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 0;
+        }
+        .header-center .test-name {
+            font-size: 18px;
             font-weight: 700;
+            line-height: 1.1;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        .header-center .heat-line {
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.1;
+            margin-top: 2px;
+            color: #333;
         }
 
         .header-right {
@@ -153,15 +168,18 @@
             <div class="date" id="hdrDate">--/--/----</div>
             <div class="clock" id="clock">--:--:--</div>
         </div>
-        <div class="header-center" id="testName">--</div>
+        <div class="header-center">
+            <div class="test-name" id="testName">--</div>
+            <div class="heat-line">Heat <span id="heatNumber">--</span></div>
+        </div>
         <div class="header-right">
             <div class="indicator">
                 <span class="label">R</span>
                 <span class="bar" id="readerBar"></span>
             </div>
             <div class="indicator">
-                <span class="label">G</span>
-                <span class="bar" id="gateBar"></span>
+                <span class="label">P</span>
+                <span class="bar" id="processingBar"></span>
             </div>
         </div>
     </div>
@@ -205,7 +223,6 @@
     <span id="statGroups" style="display:none;"></span>
     <span id="statAbsent" style="display:none;"></span>
     <span id="statNotScanned" style="display:none;"></span>
-    <span id="heatNumber" style="display:none;"></span>
     <span id="gunStartTime" style="display:none;"></span>
     <div id="heatCard" style="display:none;"></div>
 
@@ -244,7 +261,11 @@
                     candidateId: r.candidateId,
                 });
             }
-            completedCount = reads.length;
+            // Walk full list (not just the visible 8 cards) to dedup the count
+            for (const r of reads) {
+                if (r.candidateId) seen.add(r.candidateId);
+            }
+            completedCount = seen.size;
             renderCards();
             updateStats();
         }
@@ -385,7 +406,7 @@
 
                 // R bar (reader connected) and G bar (processing active)
                 document.getElementById('readerBar').classList.toggle('ok', !!d.readerConnected);
-                document.getElementById('gateBar').classList.toggle('ok', !!d.isProcessingActive);
+                document.getElementById('processingBar').classList.toggle('ok', !!d.isProcessingActive);
 
                 // Stats
                 Display.setText('statTotal', d.totalCandidates ?? '--');
