@@ -72,7 +72,7 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // Note: in normal operation a single NUC only ever has its own sequence's rows here,
         // but the filter is defensive in case a NUC is repurposed without a buffer wipe.
         var dedupQuery = _db.ProcessedEvents
-            .Where(pe => pe.EventType == "checkpoint" && distinctEpcs.Contains(pe.TagEPC));
+            .Where(pe => pe.EventType == "checkpoint" && !pe.Voided && distinctEpcs.Contains(pe.TagEPC));
 
         if (checkpointSequence.HasValue)
         {
@@ -198,22 +198,39 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // For finish gates, load all race start times for heat-candidate matching.
         // Scoped to starts received after current config was applied (prevents using
         // a gun start from a previous event when events are switched).
+        //
+        // Cancelled heats (HeatCompletion.ClosureReason='cancelled') are excluded so
+        // a re-fired heat with the same heat number — which arrives as a new
+        // RaceStartTime with a fresh HeatId — wins the heat-candidate matching.
+        // Without this filter the cancelled gun-start would still be picked up by
+        // the FirstOrDefault and the new finish times would be computed against the
+        // wrong gun (or worse, rejected by the elapsed≤0 guard).
         List<RaceStartTime> raceStarts = [];
         if (eventType == "finish")
         {
+            var cancelledHeatIds = await _db.HeatCompletions
+                .Where(hc => hc.ClosureReason == "cancelled")
+                .Select(hc => hc.HeatId)
+                .ToListAsync(ct);
+
             raceStarts = await _db.RaceStartTimes
-                .Where(r => r.ReceivedAt >= gateConfig.ReceivedAt)
+                .Where(r => r.ReceivedAt >= gateConfig.ReceivedAt
+                         && !cancelledHeatIds.Contains(r.HeatId))
                 .OrderByDescending(r => r.ReceivedAt)
                 .ToListAsync(ct);
         }
 
         // Universal cooldown: same tag is processed again only after the configured window.
         // Scoped to (candidate, active event, checkpoint sequence).
+        // Voided rows are excluded — they're stale reads from a cancelled heat or
+        // a removed candidate and shouldn't block the next valid finish.
         var activeEventId = gateConfig.ActiveEventId;
         var resolvedCandidateIds = tagMap.Values.Distinct().ToList();
 
         var dedupQuery = _db.ProcessedEvents
-            .Where(pe => pe.CandidateId != null && resolvedCandidateIds.Contains(pe.CandidateId.Value));
+            .Where(pe => pe.CandidateId != null
+                      && !pe.Voided
+                      && resolvedCandidateIds.Contains(pe.CandidateId.Value));
 
         dedupQuery = activeEventId.HasValue
             ? dedupQuery.Where(pe => pe.EventId == activeEventId.Value)

@@ -57,6 +57,94 @@ public sealed class SyncHubService : ISyncHubService
             }
         }
 
+        // If race_cancel, mark a HeatCompletion(closure_reason='cancelled') and
+        // void any finish events that landed against this heat. Idempotent —
+        // a second race_cancel for the same heat is a no-op (HeatId is unique
+        // on heat_completions).
+        //
+        // We don't remove the matching RaceStartTime — keeping it lets the
+        // gate retain the audit trail and lets BufferProcessingService skip
+        // it via the cancel-aware roster query without losing data. A re-fired
+        // heat with the same heat number arrives as a new RaceStartTime row
+        // (new HeatId) and wins the OrderByDescending lookup.
+        if (string.Equals(payload.DataType, "race_cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            var cancelPayload = payload.Payload.Deserialize<RaceCancelPayload>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (cancelPayload is not null)
+            {
+                var raceStart = await _db.RaceStartTimes
+                    .FirstOrDefaultAsync(r => r.HeatId == cancelPayload.HeatId, ct);
+
+                var existsCompletion = await _db.HeatCompletions
+                    .AnyAsync(hc => hc.HeatId == cancelPayload.HeatId, ct);
+
+                if (!existsCompletion)
+                {
+                    _db.HeatCompletions.Add(new HeatCompletion
+                    {
+                        HeatId = cancelPayload.HeatId,
+                        HeatNumber = (int)cancelPayload.HeatNumber,
+                        ExpectedCount = raceStart?.CandidateIds?.Length ?? 0,
+                        FinishedCount = 0,                      // not meaningful on cancel
+                        LastCandidateId = null,
+                        CompletedAt = cancelPayload.CancelledAt == default
+                            ? DateTimeOffset.UtcNow
+                            : cancelPayload.CancelledAt,
+                        ClosureReason = "cancelled",
+                        SourceDeviceCode = payload.DeviceCode,
+                        ReceivedAt = DateTimeOffset.UtcNow
+                    });
+                }
+
+                // Void any processed_events that landed against this heat. Use
+                // raceStart's gun_start_time as the lower bound so we don't
+                // accidentally void events from an earlier (different) heat
+                // that happened to share the same heat number.
+                if (raceStart is not null)
+                {
+                    var lower = raceStart.GunStartTime;
+                    await _db.ProcessedEvents
+                        .Where(pe => pe.EventType == "finish"
+                                  && pe.HeatNumber == raceStart.HeatNumber
+                                  && pe.ReadTime >= lower
+                                  && !pe.Voided)
+                        .ExecuteUpdateAsync(s => s.SetProperty(pe => pe.Voided, true), ct);
+                }
+            }
+        }
+
+        // If heat_candidate_remove, strip the candidate from the heat's roster
+        // and void any of their finish events for this heat. Used when the
+        // operator pulls a candidate out of a RUNNING heat (false-start case).
+        if (string.Equals(payload.DataType, "heat_candidate_remove", StringComparison.OrdinalIgnoreCase))
+        {
+            var removePayload = payload.Payload.Deserialize<HeatCandidateRemovePayload>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (removePayload is not null)
+            {
+                var raceStart = await _db.RaceStartTimes
+                    .FirstOrDefaultAsync(r => r.HeatId == removePayload.HeatId, ct);
+
+                if (raceStart is not null && raceStart.CandidateIds is not null)
+                {
+                    // EF in-memory array filter — race_start_times rows are few
+                    // (one per heat) so this is cheap.
+                    raceStart.CandidateIds = raceStart.CandidateIds
+                        .Where(id => id != removePayload.CandidateId)
+                        .ToArray();
+
+                    await _db.ProcessedEvents
+                        .Where(pe => pe.CandidateId == removePayload.CandidateId
+                                  && pe.HeatNumber == raceStart.HeatNumber
+                                  && pe.EventType == "finish"
+                                  && pe.ReadTime >= raceStart.GunStartTime
+                                  && !pe.Voided)
+                        .ExecuteUpdateAsync(s => s.SetProperty(pe => pe.Voided, true), ct);
+                }
+            }
+        }
+
         // If race_start, also insert into race_start_times
         if (string.Equals(payload.DataType, "race_start", StringComparison.OrdinalIgnoreCase))
         {
@@ -285,4 +373,21 @@ file sealed class RaceStartCandidate
 {
     public Guid CandidateId { get; set; }
     public string? AttendanceStatus { get; set; }
+}
+
+file sealed class RaceCancelPayload
+{
+    public Guid HeatId { get; set; }
+    public double HeatNumber { get; set; }      // double for the same Gson-quirk reason as race_start
+    public DateTimeOffset CancelledAt { get; set; }
+    public string? Reason { get; set; }
+}
+
+file sealed class HeatCandidateRemovePayload
+{
+    public Guid HeatId { get; set; }
+    public double HeatNumber { get; set; }
+    public Guid CandidateId { get; set; }
+    public DateTimeOffset RemovedAt { get; set; }
+    public string? Reason { get; set; }
 }

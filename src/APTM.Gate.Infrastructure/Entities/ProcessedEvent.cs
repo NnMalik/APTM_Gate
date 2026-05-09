@@ -24,6 +24,17 @@ public class ProcessedEvent
     public long? RawBufferId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// Set to true when the row has been retroactively invalidated — currently
+    /// only by an HHT-issued race_cancel or heat_candidate_remove. Voided rows
+    /// are preserved (audit trail) but excluded from:
+    ///   • The display query (finish reads list, finished count).
+    ///   • The dedup window check in BufferProcessingService — so a re-fired
+    ///     heat with the same candidates can record fresh finish times.
+    ///   • The tag_event NOTIFY trigger — see init_triggers.sql.
+    /// </summary>
+    public bool Voided { get; set; }
+
     public CandidateEntity? Candidate { get; set; }
     public RawTagBuffer? RawTag { get; set; }
 }

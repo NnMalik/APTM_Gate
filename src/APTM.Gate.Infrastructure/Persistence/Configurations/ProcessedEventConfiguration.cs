@@ -25,9 +25,15 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.Property(x => x.JacketNumber).HasColumnName("jacket_number");
         builder.Property(x => x.RawBufferId).HasColumnName("raw_buffer_id");
         builder.Property(x => x.ProcessedAt).HasColumnName("processed_at").IsRequired();
+        builder.Property(x => x.Voided).HasColumnName("voided").HasDefaultValue(false).IsRequired();
         builder.HasIndex(x => x.CandidateId).HasDatabaseName("idx_processed_events_candidate");
         builder.HasIndex(x => x.EventType).HasDatabaseName("idx_processed_events_type");
         builder.HasIndex(x => x.EventId).HasDatabaseName("idx_processed_events_event_id");
+        // Partial index — most queries care only about non-voided rows. Keeps
+        // dedup and display-feed scans cheap even after lots of cancellations.
+        builder.HasIndex(x => x.Voided)
+            .HasDatabaseName("idx_processed_events_active")
+            .HasFilter("voided = false");
         // Optional FK — checkpoint rows have CandidateId = null. SetNull on candidate
         // delete (defensive; candidates aren't deleted in normal ops).
         builder.HasOne(x => x.Candidate)

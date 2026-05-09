@@ -4,8 +4,12 @@
 -- Applied at startup by PostgresInitService (CREATE OR REPLACE = idempotent).
 -- ============================================================================
 
--- 1. tag_event: Fires on processed_events INSERT (first reads only).
+-- 1. tag_event: Fires on processed_events INSERT (first reads only, not voided).
 --    Reads denormalized name + jacket_number directly from the row (no JOIN needed).
+--    The `voided = false` guard means rows that are immediately voided (rare —
+--    can happen if a race_cancel arrives in the same SaveChangesAsync window as
+--    the finish) don't leak to the SSE display. Voiding existing rows happens
+--    via UPDATE which doesn't fire this AFTER-INSERT trigger anyway.
 CREATE OR REPLACE FUNCTION notify_tag_event() RETURNS trigger AS $$
 BEGIN
     PERFORM pg_notify('tag_event', json_build_object(
@@ -28,7 +32,7 @@ DROP TRIGGER IF EXISTS trg_notify_tag_event ON processed_events;
 CREATE TRIGGER trg_notify_tag_event
     AFTER INSERT ON processed_events
     FOR EACH ROW
-    WHEN (NEW.is_first_read = true)
+    WHEN (NEW.is_first_read = true AND NEW.voided = false)
     EXECUTE FUNCTION notify_tag_event();
 
 -- 2. race_start: Fires on race_start_times INSERT.

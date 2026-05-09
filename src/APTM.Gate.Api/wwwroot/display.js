@@ -302,6 +302,14 @@ const Display = (() => {
             const d = JSON.parse(e.data);
             addFeed('sync', `${d.data_type} from ${d.source_device_code}`);
             if (typeof onSyncData === 'function') onSyncData(d);
+
+            // Cancellation flows update existing rows server-side (RaceStartTime
+            // CandidateIds, ProcessedEvent.voided), which doesn't fire any
+            // INSERT trigger. Refresh the full display so the leaderboard /
+            // active heat reflects the void.
+            if (d.data_type === 'race_cancel' || d.data_type === 'heat_candidate_remove') {
+                setTimeout(loadDisplayData, 500);
+            }
         });
 
         src.addEventListener('config_updated', (e) => {

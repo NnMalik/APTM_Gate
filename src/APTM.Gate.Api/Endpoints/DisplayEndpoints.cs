@@ -59,8 +59,18 @@ public static class DisplayEndpoints
                 .Distinct()
                 .CountAsync(ct);
 
-            // Get latest race start for active heat info
+            // Active heat = the most recent RaceStartTime that hasn't been cancelled.
+            // Cancelled heats are kept in race_start_times for audit; HeatCompletion
+            // with closure_reason='cancelled' is the canonical "this heat was aborted"
+            // marker (also keeps the start gate display in sync via the existing
+            // sync_data SSE channel — heat_completion replication is automatic).
+            var cancelledHeatIds = await db.HeatCompletions
+                .Where(hc => hc.ClosureReason == "cancelled")
+                .Select(hc => hc.HeatId)
+                .ToListAsync(ct);
+
             var latestRaceStart = await db.RaceStartTimes
+                .Where(r => !cancelledHeatIds.Contains(r.HeatId))
                 .OrderByDescending(r => r.ReceivedAt)
                 .FirstOrDefaultAsync(ct);
 
@@ -85,12 +95,15 @@ public static class DisplayEndpoints
                     .FirstOrDefaultAsync(hc => hc.HeatId == latestRaceStart.HeatId, ct);
 
                 // Live progress count (only meaningful while the heat is in progress; harmless when complete).
+                // Voided rows (heat cancelled or candidate removed) are excluded so the
+                // count reflects what's still on the leaderboard.
                 var roster = candidateIds;
                 var finishedCount = roster.Length == 0
                     ? 0
                     : await db.ProcessedEvents
                         .Where(pe => pe.EventType == "finish"
                                   && pe.IsFirstRead
+                                  && !pe.Voided
                                   && pe.HeatNumber == latestRaceStart.HeatNumber
                                   && pe.CandidateId != null
                                   && roster.Contains(pe.CandidateId.Value))
@@ -115,8 +128,10 @@ public static class DisplayEndpoints
 
             // Get finish reads for current event only (reads from denormalized columns — no JOIN).
             // Filter out null CandidateId (only checkpoint events have null; finish always resolves).
+            // Voided rows are excluded — those are reads that landed against a heat that
+            // was later cancelled, or for a candidate that was pulled out of the heat.
             var finishReads = await db.ProcessedEvents
-                .Where(pe => pe.EventType == "finish" && pe.IsFirstRead && pe.CandidateId != null)
+                .Where(pe => pe.EventType == "finish" && pe.IsFirstRead && !pe.Voided && pe.CandidateId != null)
                 .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderBy(pe => pe.ReadTime)
                 .Select(pe => new FinishReadData
@@ -156,11 +171,42 @@ public static class DisplayEndpoints
                 })
                 .ToListAsync(ct);
 
-            // Attendance count: gate's own processed reads + synced attendance from HHTs
+            // Attendance counts: gate's own processed reads (always PRESENT) plus
+            // synced attendance from HHTs split by the `status` field on each
+            // received_sync_data row's payload.
+            //
+            // Older HHT clients (pre-mark-absent rollout) don't send a status
+            // field — those payloads are treated as PRESENT, matching legacy
+            // behaviour.
+            //
+            // Volume note: a few hundred attendance rows per test, scanned in a
+            // tight in-memory loop. If volumes ever grow, switch to a JSONB GIN
+            // index on `payload->>'status'` and aggregate in SQL.
             var gateAttendanceCount = startReads.Count;
-            var syncedAttendanceCount = await db.ReceivedSyncData
-                .CountAsync(r => r.DataType == "attendance", ct);
-            var totalPresent = gateAttendanceCount + syncedAttendanceCount;
+            var attendancePayloads = await db.ReceivedSyncData
+                .AsNoTracking()
+                .Where(r => r.DataType == "attendance")
+                .Select(r => r.Payload)
+                .ToListAsync(ct);
+
+            int presentFromHht = 0, absentFromHht = 0;
+            foreach (var doc in attendancePayloads)
+            {
+                var status = "PRESENT";
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("status", out var statusEl) &&
+                    statusEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    status = statusEl.GetString() ?? "PRESENT";
+                }
+                if (string.Equals(status, "ABSENT", StringComparison.OrdinalIgnoreCase))
+                    absentFromHht++;
+                else
+                    presentFromHht++;
+            }
+
+            var totalPresent = gateAttendanceCount + presentFromHht;
+            var totalAbsent = absentFromHht;
 
             var data = new DisplayData
             {
@@ -181,8 +227,8 @@ public static class DisplayEndpoints
                 Attendance = new AttendanceData
                 {
                     TotalPresent = totalPresent,
-                    TotalAbsent = 0,  // Only set when candidates are explicitly marked absent
-                    TotalNotScanned = totalCandidates - totalPresent
+                    TotalAbsent = totalAbsent,
+                    TotalNotScanned = Math.Max(0, totalCandidates - totalPresent - totalAbsent)
                 }
             };
 
