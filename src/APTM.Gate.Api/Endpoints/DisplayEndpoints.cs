@@ -25,14 +25,30 @@ public static class DisplayEndpoints
         .WithDescription("Server-Sent Events stream for real-time display updates. Channels: tag_event, race_start, sync_data, config_updated.")
         .ExcludeFromDescription();
 
-        app.MapGet("/gate/display-data", async (GateDbContext db, IReaderStatusProvider readerStatus, IGateStatusProvider gateStatus, CancellationToken ct) =>
+        app.MapGet("/gate/display-data", async (
+            GateDbContext db,
+            IReaderStatusProvider readerStatus,
+            IGateStatusProvider gateStatus,
+            IGateIdentityProvider identityProvider,
+            CancellationToken ct) =>
         {
+            // Identity drives the role label; config drives the rich event/heat payload.
+            var identity = identityProvider.Current;
+            if (identity is null)
+                return Results.Ok(new { gateRole = "unprovisioned" });
+
+            // Checkpoint has no display surface (root endpoint returns 204). Return a
+            // coherent stub so anything that does hit /gate/display-data on a checkpoint
+            // gets a sensible shape rather than an empty/broken full payload.
+            if (string.Equals(identity.Role, "Checkpoint", StringComparison.OrdinalIgnoreCase))
+                return Results.Ok(new { gateRole = identity.Role, note = "headless gate" });
+
             var gateConfig = await db.GateConfigs
                 .Where(g => g.IsActive)
                 .FirstOrDefaultAsync(ct);
 
             if (gateConfig is null)
-                return Results.Ok(new { gateRole = "unconfigured" });
+                return Results.Ok(new { gateRole = identity.Role, note = "awaiting config" });
 
             var activeEventId = gateConfig.ActiveEventId;
             var totalCandidates = await db.Candidates.CountAsync(ct);
@@ -62,25 +78,51 @@ public static class DisplayEndpoints
                     })
                     .ToListAsync(ct);
 
+                // Has this heat already been marked complete? (auto by finish gate, or
+                // force-closed by field app for DNF). If yes, the display should freeze.
+                var completion = await db.HeatCompletions
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(hc => hc.HeatId == latestRaceStart.HeatId, ct);
+
+                // Live progress count (only meaningful while the heat is in progress; harmless when complete).
+                var roster = candidateIds;
+                var finishedCount = roster.Length == 0
+                    ? 0
+                    : await db.ProcessedEvents
+                        .Where(pe => pe.EventType == "finish"
+                                  && pe.IsFirstRead
+                                  && pe.HeatNumber == latestRaceStart.HeatNumber
+                                  && pe.CandidateId != null
+                                  && roster.Contains(pe.CandidateId.Value))
+                        .Select(pe => pe.CandidateId)
+                        .Distinct()
+                        .CountAsync(ct);
+
                 activeHeat = new ActiveHeatData
                 {
+                    HeatId = latestRaceStart.HeatId,
                     HeatNumber = latestRaceStart.HeatNumber,
                     HasStartTime = true,
                     GunStartTime = latestRaceStart.GunStartTime,
                     OriginalGunStartTime = latestRaceStart.OriginalGunStartTime,
-                    Candidates = heatCandidates
+                    Candidates = heatCandidates,
+                    ExpectedCount = roster.Length,
+                    FinishedCount = completion?.FinishedCount ?? finishedCount,
+                    CompletedAt = completion?.CompletedAt,
+                    ClosureReason = completion?.ClosureReason
                 };
             }
 
-            // Get finish reads for current event only (reads from denormalized columns — no JOIN)
+            // Get finish reads for current event only (reads from denormalized columns — no JOIN).
+            // Filter out null CandidateId (only checkpoint events have null; finish always resolves).
             var finishReads = await db.ProcessedEvents
-                .Where(pe => pe.EventType == "finish" && pe.IsFirstRead)
+                .Where(pe => pe.EventType == "finish" && pe.IsFirstRead && pe.CandidateId != null)
                 .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderBy(pe => pe.ReadTime)
                 .Select(pe => new FinishReadData
                 {
                     Position = 0,
-                    CandidateId = pe.CandidateId,
+                    CandidateId = pe.CandidateId!.Value,
                     Name = pe.CandidateName ?? "",
                     JacketNumber = pe.JacketNumber,
                     TagEPC = pe.TagEPC,
@@ -94,14 +136,19 @@ public static class DisplayEndpoints
             for (int i = 0; i < finishReads.Count; i++)
                 finishReads[i].Position = i + 1;
 
-            // Start/attendance reads for current event (reads from denormalized columns — no JOIN)
+            // Start/attendance reads for current event (reads from denormalized columns — no JOIN).
+            // Forward-compat: today this list is always empty because Start gates have no reader
+            // so no rows of event_type='start_attendance' ever land in processed_events. Live
+            // attendance for the start display is sourced from received_sync_data below
+            // (HHT pushes attendance via /gate/sync/push). This query reactivates if a Start
+            // NUC ever gains a reader for tag-based in-person check-in.
             var startReads = await db.ProcessedEvents
-                .Where(pe => pe.EventType == "start_attendance" && pe.IsFirstRead)
+                .Where(pe => pe.EventType == "start_attendance" && pe.IsFirstRead && pe.CandidateId != null)
                 .Where(pe => activeEventId == null || pe.EventId == activeEventId)
                 .OrderByDescending(pe => pe.ReadTime)
                 .Select(pe => new StartReadData
                 {
-                    CandidateId = pe.CandidateId,
+                    CandidateId = pe.CandidateId!.Value,
                     Name = pe.CandidateName ?? "",
                     JacketNumber = pe.JacketNumber,
                     TagEPC = pe.TagEPC,
@@ -117,7 +164,9 @@ public static class DisplayEndpoints
 
             var data = new DisplayData
             {
-                GateRole = gateConfig.GateRole,
+                // Source of truth is identity — keeps the role consistent even if
+                // gate_config is stale or out-of-sync after a force-flip.
+                GateRole = identity.Role,
                 ReaderConnected = readerStatus.IsConnected,
                 IsProcessingActive = gateStatus.IsActive,
                 ActiveEventId = gateConfig.ActiveEventId,

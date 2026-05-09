@@ -1,3 +1,4 @@
+using APTM.Gate.Api.Services;
 using APTM.Gate.Core.Interfaces;
 
 namespace APTM.Gate.Api.Endpoints;
@@ -8,6 +9,7 @@ public static class ReaderEndpoints
     {
         var group = app.MapGroup("/gate/reader")
             .RequireAuthorization()
+            .RequireReaderRole()  // Start gates have no reader — 410 Gone for them.
             .WithTags("Reader");
 
         // --- Existing endpoints ---

@@ -28,11 +28,24 @@ public sealed class StartReadData
 
 public sealed class ActiveHeatData
 {
+    public Guid HeatId { get; set; }
     public int HeatNumber { get; set; }
     public bool HasStartTime { get; set; }
     public DateTimeOffset? GunStartTime { get; set; }
     public DateTimeOffset? OriginalGunStartTime { get; set; }
     public List<HeatCandidateData> Candidates { get; set; } = [];
+
+    /// <summary>Total candidates expected to finish (= Candidates.Count).</summary>
+    public int ExpectedCount { get; set; }
+
+    /// <summary>How many of the expected roster have finished so far.</summary>
+    public int FinishedCount { get; set; }
+
+    /// <summary>Timestamp when the last candidate finished (or force-close wall time). Null = heat in progress.</summary>
+    public DateTimeOffset? CompletedAt { get; set; }
+
+    /// <summary>"auto" | "force_close" | null. Helps the display label the freeze appropriately.</summary>
+    public string? ClosureReason { get; set; }
 }
 
 public sealed class HeatCandidateData

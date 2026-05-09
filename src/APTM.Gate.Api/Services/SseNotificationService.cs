@@ -86,12 +86,12 @@ public sealed class SseNotificationService : BackgroundService
         };
 
         await using (var cmd = new NpgsqlCommand(
-            "LISTEN tag_event; LISTEN race_start; LISTEN sync_data; LISTEN config_updated;", conn))
+            "LISTEN tag_event; LISTEN race_start; LISTEN sync_data; LISTEN config_updated; LISTEN heat_complete;", conn))
         {
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
-        _logger.LogInformation("Listening on PostgreSQL channels: tag_event, race_start, sync_data, config_updated");
+        _logger.LogInformation("Listening on PostgreSQL channels: tag_event, race_start, sync_data, config_updated, heat_complete");
 
         while (!ct.IsCancellationRequested)
         {

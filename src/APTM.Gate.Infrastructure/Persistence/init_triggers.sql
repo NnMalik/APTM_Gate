@@ -73,3 +73,28 @@ CREATE TRIGGER trg_notify_sync_data
 
 -- 4. config_updated: Fired manually via NOTIFY in GateConfigService.
 --    No trigger needed — the service calls pg_notify('config_updated', ...) directly.
+
+-- 5. heat_complete: Fires on heat_completions INSERT.
+--    Includes heat_id, heat_number, completed_at, last_candidate_id, closure_reason
+--    so the display can freeze the timer at the right moment.
+CREATE OR REPLACE FUNCTION notify_heat_complete() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('heat_complete', json_build_object(
+        'heat_id', NEW.heat_id,
+        'heat_number', NEW.heat_number,
+        'expected_count', NEW.expected_count,
+        'finished_count', NEW.finished_count,
+        'last_candidate_id', NEW.last_candidate_id,
+        'completed_at', to_char(NEW.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'closure_reason', NEW.closure_reason,
+        'source_device_code', NEW.source_device_code
+    )::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_notify_heat_complete ON heat_completions;
+CREATE TRIGGER trg_notify_heat_complete
+    AFTER INSERT ON heat_completions
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_heat_complete();

@@ -297,6 +297,14 @@ body {
     font-family: 'Consolas', 'Courier New', monospace;
     color: var(--green);
     line-height: 1;
+    transition: color 0.3s ease;
+}
+/* Heat ended — timer is locked at the final time. Visual cue: blue (auto) or amber (force-close). */
+.heat-timer-value.frozen {
+    color: var(--accent);
+}
+.heat-timer-value.frozen.force-close {
+    color: var(--orange);
 }
 .heat-timer-label {
     font-size: clamp(12px, 1.1vw, 20px);

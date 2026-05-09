@@ -9,6 +9,10 @@ const Display = (() => {
     const state = {
         gateRole: 'unconfigured',
         gunStartTime: null,
+        // When set, the heat is over and the timer freezes at (heatCompletedAt - gunStartTime).
+        // Cleared on race_start so a new heat starts the timer fresh.
+        heatCompletedAt: null,
+        heatClosureReason: null,    // 'auto' | 'force_close'
         timerInterval: null,
         feedCount: 0,
         sseSource: null,
@@ -100,6 +104,9 @@ const Display = (() => {
     function applyHeat(heat) {
         // Timer uses adjusted gun time (Gate's clock domain) for correct elapsed
         state.gunStartTime = heat.gunStartTime ? new Date(heat.gunStartTime) : null;
+        state.heatCompletedAt = heat.completedAt ? new Date(heat.completedAt) : null;
+        state.heatClosureReason = heat.closureReason || null;
+
         setText('heatNumber', heat.heatNumber ?? '--');
         setText('statHeat', heat.heatNumber ?? '--');
 
@@ -112,13 +119,36 @@ const Display = (() => {
                 ? new Date(heat.originalGunStartTime)
                 : state.gunStartTime;
             setText('gunStartTime', formatClockTime(displayTime));
-            setLiveIndicator(true);
-            startHeatTimer();
+
+            if (state.heatCompletedAt) {
+                // Page loaded mid-completed-heat (or after force-close). Freeze immediately.
+                renderFrozenTimer();
+                setLiveIndicator(false);
+            } else {
+                setLiveIndicator(true);
+                startHeatTimer();
+            }
         }
 
         // Heat candidates (start display)
         if (heat.candidates && typeof onHeatCandidatesLoaded === 'function') {
             onHeatCandidatesLoaded(heat.candidates);
+        }
+    }
+
+    function renderFrozenTimer() {
+        if (state.timerInterval) {
+            clearInterval(state.timerInterval);
+            state.timerInterval = null;
+        }
+        if (!state.gunStartTime || !state.heatCompletedAt) return;
+        const el = document.getElementById('heatTimer');
+        if (!el) return;
+        const elapsed = (state.heatCompletedAt.getTime() - state.gunStartTime.getTime()) / 1000;
+        el.textContent = formatElapsed(Math.max(0, elapsed));
+        el.classList.add('frozen');
+        if (state.heatClosureReason === 'force_close') {
+            el.classList.add('force-close');
         }
     }
 
@@ -129,12 +159,17 @@ const Display = (() => {
             state.timerInterval = null;
         }
         state.gunStartTime = null;
+        state.heatCompletedAt = null;
+        state.heatClosureReason = null;
 
         const timerCard = document.getElementById('heatCard');
         if (timerCard) timerCard.style.display = 'none';
 
         const timerEl = document.getElementById('heatTimer');
-        if (timerEl) timerEl.textContent = '00:00.000';
+        if (timerEl) {
+            timerEl.textContent = '00:00.000';
+            timerEl.classList.remove('frozen', 'force-close');
+        }
 
         setText('heatNumber', '--');
         setText('statHeat', '--');
@@ -229,6 +264,12 @@ const Display = (() => {
             const d = JSON.parse(e.data);
             // Timer uses adjusted gun time (Gate's clock domain)
             state.gunStartTime = new Date(d.gun_start_time);
+            // New heat starts a fresh timer — clear any prior completion freeze.
+            state.heatCompletedAt = null;
+            state.heatClosureReason = null;
+            const timerEl = document.getElementById('heatTimer');
+            if (timerEl) timerEl.classList.remove('frozen', 'force-close');
+
             // Label shows original HHT gun time (what the starter saw)
             const displayTime = d.original_gun_start_time
                 ? new Date(d.original_gun_start_time)
@@ -243,6 +284,18 @@ const Display = (() => {
             addFeed('start', `Group ${d.heat_number} — Gun fired`);
 
             if (typeof onRaceStart === 'function') onRaceStart(d);
+        });
+
+        src.addEventListener('heat_complete', (e) => {
+            const d = JSON.parse(e.data);
+            state.heatCompletedAt = d.completed_at ? new Date(d.completed_at) : new Date();
+            state.heatClosureReason = d.closure_reason || 'auto';
+            renderFrozenTimer();
+            setLiveIndicator(false);
+            const label = state.heatClosureReason === 'force_close' ? 'ended manually' : 'complete';
+            addFeed('finish', `Heat ${d.heat_number} — ${label}`);
+            showToast('finish', `Heat ${d.heat_number} ${label} (${formatClockTime(state.heatCompletedAt)})`);
+            if (typeof onHeatComplete === 'function') onHeatComplete(d);
         });
 
         src.addEventListener('sync_data', (e) => {

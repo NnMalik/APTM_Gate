@@ -10,8 +10,13 @@ namespace APTM.Gate.Infrastructure.Services;
 public sealed class SyncHubService : ISyncHubService
 {
     private readonly GateDbContext _db;
+    private readonly IGateIdentityProvider _identityProvider;
 
-    public SyncHubService(GateDbContext db) => _db = db;
+    public SyncHubService(GateDbContext db, IGateIdentityProvider identityProvider)
+    {
+        _db = db;
+        _identityProvider = identityProvider;
+    }
 
     public async Task<SyncPushResult> PushAsync(SyncPushPayload payload, CancellationToken ct = default)
     {
@@ -21,6 +26,36 @@ public sealed class SyncHubService : ISyncHubService
 
         if (exists)
             return SyncPushResult.Duplicate(payload.ClientRecordId);
+
+        // If heat_completion, also upsert into heat_completions so the local display can
+        // freeze its timer at the same moment the finish gate did. Idempotent — duplicate
+        // pushes for the same heat_id are silently dropped (unique index on heat_id).
+        if (string.Equals(payload.DataType, "heat_completion", StringComparison.OrdinalIgnoreCase))
+        {
+            var heatPayload = payload.Payload.Deserialize<HeatCompletionDto>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (heatPayload is not null)
+            {
+                var existsHeatCompletion = await _db.HeatCompletions
+                    .AnyAsync(hc => hc.HeatId == heatPayload.HeatId, ct);
+
+                if (!existsHeatCompletion)
+                {
+                    _db.HeatCompletions.Add(new HeatCompletion
+                    {
+                        HeatId = heatPayload.HeatId,
+                        HeatNumber = heatPayload.HeatNumber,
+                        ExpectedCount = heatPayload.ExpectedCount,
+                        FinishedCount = heatPayload.FinishedCount,
+                        LastCandidateId = heatPayload.LastCandidateId,
+                        CompletedAt = heatPayload.CompletedAt,
+                        ClosureReason = string.IsNullOrWhiteSpace(heatPayload.ClosureReason) ? "auto" : heatPayload.ClosureReason,
+                        SourceDeviceCode = heatPayload.SourceDeviceCode,
+                        ReceivedAt = DateTimeOffset.UtcNow
+                    });
+                }
+            }
+        }
 
         // If race_start, also insert into race_start_times
         if (string.Equals(payload.DataType, "race_start", StringComparison.OrdinalIgnoreCase))
@@ -142,6 +177,22 @@ public sealed class SyncHubService : ISyncHubService
             })
             .ToListAsync(ct);
 
+        var heatCompletions = await _db.HeatCompletions
+            .AsNoTracking()
+            .OrderBy(hc => hc.ReceivedAt)
+            .Select(hc => new HeatCompletionDto
+            {
+                HeatId = hc.HeatId,
+                HeatNumber = hc.HeatNumber,
+                ExpectedCount = hc.ExpectedCount,
+                FinishedCount = hc.FinishedCount,
+                LastCandidateId = hc.LastCandidateId,
+                CompletedAt = hc.CompletedAt,
+                ClosureReason = hc.ClosureReason,
+                SourceDeviceCode = hc.SourceDeviceCode
+            })
+            .ToListAsync(ct);
+
         var highWaterMark = events.Count > 0 ? events.Max(e => e.Id) : sinceEventId;
 
         // Log the pull
@@ -161,6 +212,7 @@ public sealed class SyncHubService : ISyncHubService
             ProcessedEvents = events,
             ReceivedSyncData = syncData,
             RaceStartTimes = raceStarts,
+            HeatCompletions = heatCompletions,
             HighWaterMark = highWaterMark,
             SyncDataHighWaterMs = syncData.Count > 0
                 ? syncData.Max(s => s.ReceivedAt).ToUnixTimeMilliseconds()
@@ -192,10 +244,19 @@ public sealed class SyncHubService : ISyncHubService
             })
             .ToListAsync(ct);
 
+        // Identity is the source of truth for the role — config is the source of truth
+        // for event metadata. Splitting them avoids "unconfigured" leaking out for
+        // Checkpoint NUCs (which never receive config) or for Start/Finish that are
+        // provisioned but pre-config.
+        var identity = _identityProvider.Current;
+
         return new SyncStatusResponse
         {
-            DeviceCode = gateConfig?.DeviceCode ?? "",
-            GateRole = gateConfig?.GateRole ?? "unconfigured",
+            DeviceCode = identity?.DeviceCode ?? gateConfig?.DeviceCode ?? "",
+            GateRole = identity?.Role ?? "unprovisioned",
+            // Surfaced separately so the field app can detect a real desync (identity
+            // force-flipped after a config push). Will normally equal GateRole.
+            ConfiguredRole = gateConfig?.GateRole,
             ActiveEventId = gateConfig?.ActiveEventId,
             ActiveEventName = gateConfig?.ActiveEventName,
             TestInstanceId = gateConfig?.TestInstanceId ?? Guid.Empty,

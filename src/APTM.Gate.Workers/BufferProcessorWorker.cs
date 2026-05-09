@@ -21,16 +21,19 @@ public sealed class BufferProcessorWorker : BackgroundService
     private readonly ILogger<BufferProcessorWorker> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IGateStatusProvider _statusProvider;
+    private readonly IGateIdentityProvider _identityProvider;
     private readonly SemaphoreSlim _wakeSignal = new(0, 1);
 
     public BufferProcessorWorker(
         ILogger<BufferProcessorWorker> logger,
         IServiceScopeFactory scopeFactory,
-        IGateStatusProvider statusProvider)
+        IGateStatusProvider statusProvider,
+        IGateIdentityProvider identityProvider)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _statusProvider = statusProvider;
+        _identityProvider = identityProvider;
 
         // Wake up when gate status changes
         _statusProvider.StatusChanged += () =>
@@ -42,6 +45,15 @@ public sealed class BufferProcessorWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Identity gate: un-provisioned gates have no role context for dedup / event resolution.
+        // Start gates have no reader, so the buffer is always empty — but we still let it run
+        // in case future flows push raw rows from sync. Restart is the documented path for flips.
+        if (_identityProvider.Current is null)
+        {
+            _logger.LogInformation("BufferProcessorWorker exiting — gate is not provisioned. PUT /gate/identity then restart the service.");
+            return;
+        }
+
         _logger.LogInformation("BufferProcessorWorker started — waiting for gate to become active");
 
         while (!stoppingToken.IsCancellationRequested)

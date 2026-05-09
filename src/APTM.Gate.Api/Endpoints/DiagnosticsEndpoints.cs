@@ -1,3 +1,4 @@
+using APTM.Gate.Api.Services;
 using APTM.Gate.Core.Interfaces;
 
 namespace APTM.Gate.Api.Endpoints;
@@ -12,6 +13,7 @@ public static class DiagnosticsEndpoints
             return Results.Ok(result);
         })
         .RequireAuthorization()
+        .RequireReaderRole()  // Diagnostics is reader-centric — Start gates don't expose it.
         .WithTags("Diagnostics")
         .WithName("GetDiagnostics")
         .WithSummary("Get gate diagnostics")

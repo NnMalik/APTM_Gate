@@ -11,7 +11,8 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.ToTable("processed_events");
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Id).HasColumnName("id").UseIdentityAlwaysColumn();
-        builder.Property(x => x.CandidateId).HasColumnName("candidate_id").IsRequired();
+        // Nullable: checkpoint events never resolve a candidate (no tag_assignments).
+        builder.Property(x => x.CandidateId).HasColumnName("candidate_id");
         builder.Property(x => x.TagEPC).HasColumnName("tag_epc").HasMaxLength(64).IsRequired();
         builder.Property(x => x.EventType).HasColumnName("event_type").HasMaxLength(20).IsRequired();
         builder.Property(x => x.EventId).HasColumnName("event_id");
@@ -27,7 +28,16 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.HasIndex(x => x.CandidateId).HasDatabaseName("idx_processed_events_candidate");
         builder.HasIndex(x => x.EventType).HasDatabaseName("idx_processed_events_type");
         builder.HasIndex(x => x.EventId).HasDatabaseName("idx_processed_events_event_id");
-        builder.HasOne(x => x.Candidate).WithMany().HasForeignKey(x => x.CandidateId);
-        builder.HasOne(x => x.RawTag).WithMany().HasForeignKey(x => x.RawBufferId);
+        // Optional FK — checkpoint rows have CandidateId = null. SetNull on candidate
+        // delete (defensive; candidates aren't deleted in normal ops).
+        builder.HasOne(x => x.Candidate)
+            .WithMany()
+            .HasForeignKey(x => x.CandidateId)
+            .OnDelete(DeleteBehavior.SetNull)
+            .IsRequired(false);
+        builder.HasOne(x => x.RawTag)
+            .WithMany()
+            .HasForeignKey(x => x.RawBufferId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }

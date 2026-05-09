@@ -17,7 +17,9 @@ public static class DependencyInjection
             options.UseNpgsql(configuration.GetConnectionString("GateDb")));
 
         services.AddSingleton<IGateStatusProvider, GateStatusProvider>();
+        services.AddSingleton<IGateIdentityProvider, GateIdentityProvider>();
         services.AddScoped<IGateConfigService, GateConfigService>();
+        services.AddScoped<IGateIdentityService, GateIdentityService>();
         services.AddScoped<ITagBufferService, TagBufferService>();
         services.AddScoped<IBufferProcessingService, BufferProcessingService>();
         services.AddScoped<ISyncHubService, SyncHubService>();

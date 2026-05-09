@@ -11,24 +11,52 @@ namespace APTM.Gate.Infrastructure.Services;
 public sealed class GateConfigService : IGateConfigService
 {
     private readonly GateDbContext _db;
+    private readonly IGateIdentityProvider _identityProvider;
     private readonly string _deviceCode;
     private readonly string _connectionString;
 
-    public GateConfigService(GateDbContext db, IConfiguration configuration)
+    public GateConfigService(GateDbContext db, IGateIdentityProvider identityProvider, IConfiguration configuration)
     {
         _db = db;
+        _identityProvider = identityProvider;
         _deviceCode = configuration["Gate:DeviceCode"] ?? throw new InvalidOperationException("Gate:DeviceCode not configured");
         _connectionString = configuration.GetConnectionString("GateDb") ?? throw new InvalidOperationException("GateDb connection string not configured");
     }
 
     public async Task<ConfigResult> ApplyConfigAsync(ConfigPackageDto config, CancellationToken ct = default)
     {
+        // Identity is the source of truth for role + checkpoint sequence. The gate must be
+        // provisioned via PUT /gate/identity before any config-package can be applied.
+        var identity = _identityProvider.Current;
+        if (identity is null)
+        {
+            return ConfigResult.Fail(
+                "Gate is not provisioned. PUT /gate/identity to set role, restart the service, then re-push the config.");
+        }
+
         // Find this gate in the config package
         var thisGate = config.Gates.FirstOrDefault(g =>
             string.Equals(g.DeviceCode, _deviceCode, StringComparison.OrdinalIgnoreCase));
 
         if (thisGate is null)
             return ConfigResult.Fail($"Gate '{_deviceCode}' not found in config package gates list.");
+
+        // Validate the package's gateType against the provisioned identity. The package's role
+        // is informational only — identity wins. Mismatch means the field app sent the wrong
+        // package or someone re-imaged a NUC without updating Main's gate registry.
+        if (!string.Equals(thisGate.GateType, identity.Role, StringComparison.OrdinalIgnoreCase))
+        {
+            return ConfigResult.Fail(
+                $"Config role mismatch. Package says '{thisGate.GateType}', " +
+                $"this gate is provisioned as '{identity.Role}'. " +
+                $"Re-push a corrected config or use PUT /gate/identity?force=true to re-provision.");
+        }
+        if (identity.Role == "Checkpoint" && thisGate.CheckpointSequence != identity.CheckpointSequence)
+        {
+            return ConfigResult.Fail(
+                $"Checkpoint sequence mismatch. Package says {thisGate.CheckpointSequence}, " +
+                $"this gate is provisioned as sequence {identity.CheckpointSequence}.");
+        }
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
@@ -175,8 +203,11 @@ public sealed class GateConfigService : IGateConfigService
                 TestInstanceName = config.TestInstanceName,
                 DeviceId = thisGate.DeviceId,
                 DeviceCode = _deviceCode,
-                GateRole = thisGate.GateType,
-                CheckpointSequence = thisGate.CheckpointSequence,
+                // GateRole + CheckpointSequence are sourced from gate_identity, NOT the config-package.
+                // Kept on gate_config as a denormalized read cache for legacy consumers; identity is
+                // the single source of truth.
+                GateRole = identity.Role,
+                CheckpointSequence = identity.CheckpointSequence,
                 ActiveEventId = thisGate.EventId,
                 ActiveEventName = thisGate.EventId.HasValue
                     ? config.Events.FirstOrDefault(e => e.EventId == thisGate.EventId.Value)?.EventName
@@ -195,11 +226,11 @@ public sealed class GateConfigService : IGateConfigService
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync(ct);
             await using var cmd = new NpgsqlCommand(
-                $"NOTIFY config_updated, '{System.Text.Json.JsonSerializer.Serialize(new { gateRole = thisGate.GateType, candidateCount = config.Candidates.Count })}'",
+                $"NOTIFY config_updated, '{System.Text.Json.JsonSerializer.Serialize(new { gateRole = identity.Role, candidateCount = config.Candidates.Count })}'",
                 conn);
             await cmd.ExecuteNonQueryAsync(ct);
 
-            return ConfigResult.Ok(thisGate.GateType, config.Candidates.Count);
+            return ConfigResult.Ok(identity.Role, config.Candidates.Count);
         }
         catch (Exception ex)
         {

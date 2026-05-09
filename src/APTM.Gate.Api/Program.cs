@@ -1,5 +1,7 @@
 using APTM.Gate.Api.Endpoints;
 using APTM.Gate.Api.Services;
+using APTM.Gate.Core.Enums;
+using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Infrastructure;
 using APTM.Gate.Workers;
 using Microsoft.OpenApi.Models;
@@ -84,6 +86,8 @@ app.UseAuthorization();
 app.UseStaticFiles();
 
 // Map endpoints
+app.MapRootEndpoints();
+app.MapIdentityEndpoints();
 app.MapConfigEndpoints();
 app.MapSyncEndpoints();
 app.MapDisplayEndpoints();
@@ -91,5 +95,33 @@ app.MapReaderEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapHealthEndpoints();
 app.MapTokenEndpoints();
+app.MapLifecycleEndpoints();
+app.MapBufferEndpoints();
+app.MapHeatEndpoints();
+
+// Auto-activate the buffer processor on Checkpoint NUCs. They sit at remote points along
+// the route with no operator nearby — without auto-activation a fresh checkpoint would
+// record raw reads but never process them. Identity load is best-effort: if the DB isn't
+// ready yet (PostgresInitService is still applying migrations) the provider returns null
+// and the processor stays idle until the next status toggle.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var identityProvider = scope.ServiceProvider.GetRequiredService<IGateIdentityProvider>();
+        var statusProvider = scope.ServiceProvider.GetRequiredService<IGateStatusProvider>();
+        var identity = identityProvider.Current;
+        if (identity is not null
+            && Enum.TryParse<GateRole>(identity.Role, out var role)
+            && role == GateRole.Checkpoint)
+        {
+            statusProvider.SetActive(true);
+        }
+    }
+    catch
+    {
+        // Best-effort: any failure here means the gate stays idle until a manual status flip.
+    }
+}
 
 app.Run();

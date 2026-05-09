@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using APTM.Gate.Core.Enums;
 using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +19,7 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 {
     private readonly ILogger<TcpReaderWorker> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IGateIdentityProvider _identityProvider;
     private readonly string _readerHost;
     private readonly int _readerPort;
     private readonly int _reconnectDelayMs;
@@ -48,10 +50,12 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     public TcpReaderWorker(
         ILogger<TcpReaderWorker> logger,
         IServiceScopeFactory scopeFactory,
+        IGateIdentityProvider identityProvider,
         IConfiguration configuration)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _identityProvider = identityProvider;
         _readerHost = configuration["Reader:Host"] ?? "127.0.0.1";
         _readerPort = int.TryParse(configuration["Reader:Port"], out var port) ? port : 27011;
         _reconnectDelayMs = int.TryParse(configuration["Reader:ReconnectDelayMs"], out var delay) ? delay : 5000;
@@ -61,7 +65,22 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("TcpReaderWorker starting — target {Host}:{Port}", _readerHost, _readerPort);
+        // Role gate: Start gates have no reader; un-provisioned gates have nothing to do.
+        // We deliberately do NOT poll for identity changes here — provisioning is one-time
+        // and a service restart is the documented path for role flips.
+        var identity = _identityProvider.Current;
+        if (identity is null)
+        {
+            _logger.LogInformation("TcpReaderWorker exiting — gate is not provisioned. PUT /gate/identity then restart the service.");
+            return;
+        }
+        if (!Enum.TryParse<GateRole>(identity.Role, out var role) || role == GateRole.Start)
+        {
+            _logger.LogInformation("TcpReaderWorker exiting — role is {Role}; no reader expected.", identity.Role);
+            return;
+        }
+
+        _logger.LogInformation("TcpReaderWorker starting — role {Role}, target {Host}:{Port}", role, _readerHost, _readerPort);
 
         while (!stoppingToken.IsCancellationRequested)
         {

@@ -3,7 +3,8 @@ namespace APTM.Gate.Core.Models;
 public sealed class ProcessedEventDto
 {
     public long Id { get; set; }
-    public Guid CandidateId { get; set; }
+    /// <summary>Null for checkpoint events.</summary>
+    public Guid? CandidateId { get; set; }
     public string TagEpc { get; set; } = default!;
     public string EventType { get; set; } = default!;
     public int? EventId { get; set; }
