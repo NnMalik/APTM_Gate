@@ -35,6 +35,39 @@ public class ProcessedEvent
     /// </summary>
     public bool Voided { get; set; }
 
+    /// <summary>
+    /// Denormalized from <see cref="RaceStartTime.GroupId"/> at finish-match time.
+    /// Lets the per-group display counters be a fast indexed query instead of a join.
+    /// NULL for: legacy rows, checkpoint events (no heat to source from), and
+    /// <c>UNRESOLVED</c> finishes (no matched heat).
+    /// </summary>
+    public Guid? GroupId { get; set; }
+
+    /// <summary>
+    /// The heat (UUID) this finish belongs to, copied from <see cref="RaceStartTime.HeatId"/>
+    /// when the buffer processor matches a finish to a heat. This is the *load-bearing*
+    /// identifier — replacing <see cref="HeatNumber"/> in queries that void or count
+    /// per-heat events. <c>HeatNumber</c> stays as a display label, scoped per-group
+    /// via the (groupId, heatNumber) uniqueness on Main.
+    ///
+    /// NULL for: checkpoint events (no heat), legacy rows pre-Phase-7, and finishes
+    /// the gate couldn't match to any heat's roster (see <see cref="Status"/> = UNRESOLVED).
+    /// </summary>
+    public Guid? HeatId { get; set; }
+
+    /// <summary>
+    /// Optional outcome label for finish events that couldn't be cleanly matched.
+    /// Values: NULL (matched / not applicable) | "UNRESOLVED" (finish read but no
+    /// heat's roster contained the candidate). UNRESOLVED rows are excluded from
+    /// the display feed and the dedup window; they exist purely so admins can
+    /// reconcile after the test (e.g. via a "review unresolved" UI on Main).
+    ///
+    /// Replaces the legacy <c>?? raceStarts[0]</c> fallback in the buffer processor:
+    /// instead of guessing which heat a stray read belongs to, we record it as
+    /// UNRESOLVED and let humans decide. See DESIGN_OPERATOR_GROUPS.md §6.3.
+    /// </summary>
+    public string? Status { get; set; }
+
     public CandidateEntity? Candidate { get; set; }
     public RawTagBuffer? RawTag { get; set; }
 }

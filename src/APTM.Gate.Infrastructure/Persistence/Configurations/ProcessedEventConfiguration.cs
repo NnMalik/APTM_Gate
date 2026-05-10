@@ -26,6 +26,11 @@ public class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEve
         builder.Property(x => x.RawBufferId).HasColumnName("raw_buffer_id");
         builder.Property(x => x.ProcessedAt).HasColumnName("processed_at").IsRequired();
         builder.Property(x => x.Voided).HasColumnName("voided").HasDefaultValue(false).IsRequired();
+        builder.Property(x => x.GroupId).HasColumnName("group_id");
+        builder.HasIndex(x => x.GroupId).HasDatabaseName("idx_processed_events_group_id");
+        builder.Property(x => x.HeatId).HasColumnName("heat_id");
+        builder.HasIndex(x => x.HeatId).HasDatabaseName("idx_processed_events_heat_id");
+        builder.Property(x => x.Status).HasColumnName("status").HasMaxLength(20);
         builder.HasIndex(x => x.CandidateId).HasDatabaseName("idx_processed_events_candidate");
         builder.HasIndex(x => x.EventType).HasDatabaseName("idx_processed_events_type");
         builder.HasIndex(x => x.EventId).HasDatabaseName("idx_processed_events_event_id");

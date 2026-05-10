@@ -20,6 +20,30 @@ public class ConfigPackageDto
     public List<ConfigCheckpointRouteDto> CheckpointRoutes { get; set; } = [];
     public List<ConfigScoringTypeDto> ScoringTypes { get; set; } = [];
     public List<GateWifiCredentialDto> GateWifiCredentials { get; set; } = [];
+
+    /// <summary>
+    /// Site-defined custom column schema (Unit / Rank / Wing / etc.). Forwarded from
+    /// Main; gate doesn't process it directly today but stashes the JSON so the next
+    /// HHT pulling from the gate (Phase 3+) gets the schema. Empty when the site has
+    /// no custom columns or when running against a Main version that pre-dates this
+    /// field — old gates ignore the field gracefully.
+    /// </summary>
+    public List<ConfigCustomColumnDto> CustomColumns { get; set; } = [];
+
+    /// <summary>
+    /// Operator groups defined on Main for this test. The gate persists these into
+    /// its own <c>operator_group</c> tables so the finish-gate display can show
+    /// per-group counters and so other devices polling <c>GET /gate/operator-groups</c>
+    /// see authoritative state. Empty when running in legacy "no groups" mode.
+    /// </summary>
+    public List<ConfigOperatorGroupDto> OperatorGroups { get; set; } = [];
+
+    /// <summary>
+    /// Group → device assignments shipped from Main. Stored on the gate purely for
+    /// surfacing via <c>GET /gate/operator-groups</c> so other HHTs can detect overlap
+    /// when picking their selection (decision #3).
+    /// </summary>
+    public List<ConfigOperatorGroupAssignmentDto> OperatorGroupAssignments { get; set; } = [];
 }
 
 public class ConfigCandidateDto
@@ -32,6 +56,38 @@ public class ConfigCandidateDto
     public DateOnly DateOfBirth { get; set; }
     public string? TagEPC { get; set; }
     public int? JacketNumber { get; set; }
+
+    /// <summary>
+    /// Custom attributes (column name → value). Forwarded as-is to HHT via the gate.
+    /// The gate doesn't query this today; it's pure pass-through. <c>JsonExtensionData</c>
+    /// would be cleaner but a typed dictionary is simpler and keeps the gate's
+    /// <c>GateConfigService</c> (which doesn't persist this) trivially correct.
+    /// </summary>
+    public Dictionary<string, string?> CustomData { get; set; } = new();
+}
+
+/// <summary>Schema row for a custom candidate column. Pure pass-through on the gate.</summary>
+public class ConfigCustomColumnDto
+{
+    public int ColumnId { get; set; }
+    public string Name { get; set; } = default!;
+    public string DisplayLabel { get; set; } = default!;
+    public string DataType { get; set; } = default!;
+    public bool IsFilterable { get; set; }
+}
+
+public class ConfigOperatorGroupDto
+{
+    public Guid GroupId { get; set; }
+    public string Name { get; set; } = default!;
+    public List<Guid> CandidateIds { get; set; } = [];
+}
+
+public class ConfigOperatorGroupAssignmentDto
+{
+    public Guid GroupId { get; set; }
+    public Guid DeviceId { get; set; }
+    public string DeviceCode { get; set; } = default!;
 }
 
 public class ConfigEventDto

@@ -22,6 +22,10 @@ public class GateDbContext : DbContext
     public DbSet<ScoringStatusEntity> ScoringStatuses => Set<ScoringStatusEntity>();
     public DbSet<TestEventEntity> TestEvents => Set<TestEventEntity>();
     public DbSet<AcceptedTokenEntity> AcceptedTokens => Set<AcceptedTokenEntity>();
+    public DbSet<ReaderConfigEntity> ReaderConfigs => Set<ReaderConfigEntity>();
+    public DbSet<OperatorGroupEntity> OperatorGroups => Set<OperatorGroupEntity>();
+    public DbSet<OperatorGroupCandidateEntity> OperatorGroupCandidates => Set<OperatorGroupCandidateEntity>();
+    public DbSet<OperatorGroupAssignmentEntity> OperatorGroupAssignments => Set<OperatorGroupAssignmentEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

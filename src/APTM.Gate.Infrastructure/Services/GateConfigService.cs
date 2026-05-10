@@ -79,15 +79,18 @@ public sealed class GateConfigService : IGateConfigService
 
                 if (maxPulledEventId >= maxEventId && totalEvents > 0)
                 {
-                    // All data has been synced — safe to clear
+                    // All data has been synced — safe to clear. heat_completions is included
+                    // here because it's per-race state (one row per heat finish/cancel) and
+                    // would otherwise leak across test instances.
                     await _db.Database.ExecuteSqlRawAsync(
-                        "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, received_sync_data, sync_logs CASCADE", ct);
+                        "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, received_sync_data, sync_logs, heat_completions CASCADE", ct);
                 }
                 // If not fully synced, old data remains (will be collected on next pull)
             }
 
             // Truncate config tables + race start times (stale starts from previous events must not affect new elapsed calculations)
-            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates, race_start_times CASCADE", ct);
+            // operator_group cascades to operator_group_candidate / operator_group_assignment via FK.
+            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates, race_start_times, operator_group CASCADE", ct);
 
             // Insert candidates
             foreach (var c in config.Candidates)
@@ -167,6 +170,47 @@ public sealed class GateConfigService : IGateConfigService
                     EventType = e.EventType,
                     Sequence = e.Sequence,
                     ScoringTypeId = e.ScoringTypeId
+                });
+            }
+
+            // ── Operator groups + assignments ────────────────────────────────────
+            // Persisted on the gate so:
+            //   1. The finish display can show per-group counters (Phase 6 wires the read-side).
+            //   2. /gate/operator-groups exposes the active state to other HHTs picking
+            //      their selection — supports decision #3 overlap warnings.
+            // Truncated above as part of the config-table TRUNCATE (operator_group cascade).
+            foreach (var group in config.OperatorGroups)
+            {
+                _db.OperatorGroups.Add(new OperatorGroupEntity
+                {
+                    GroupId = group.GroupId,
+                    Name = group.Name,
+                    // Denormalised array — fast-path for set-membership checks during
+                    // finish processing without joining to operator_group_candidate.
+                    CandidateIds = group.CandidateIds.ToArray()
+                });
+
+                foreach (var candidateId in group.CandidateIds)
+                {
+                    _db.OperatorGroupCandidates.Add(new OperatorGroupCandidateEntity
+                    {
+                        GroupId = group.GroupId,
+                        CandidateId = candidateId
+                    });
+                }
+            }
+
+            foreach (var assignment in config.OperatorGroupAssignments)
+            {
+                // Skip orphaned assignments — defensive against stale Main payloads
+                // where a group was deleted but its assignments still ship.
+                if (config.OperatorGroups.All(g => g.GroupId != assignment.GroupId))
+                    continue;
+
+                _db.OperatorGroupAssignments.Add(new OperatorGroupAssignmentEntity
+                {
+                    GroupId = assignment.GroupId,
+                    DeviceCode = assignment.DeviceCode
                 });
             }
 

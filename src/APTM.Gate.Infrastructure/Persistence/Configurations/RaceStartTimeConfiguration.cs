@@ -20,5 +20,11 @@ public class RaceStartTimeConfiguration : IEntityTypeConfiguration<RaceStartTime
         builder.Property(x => x.CandidateIds).HasColumnName("candidate_ids").IsRequired();
         builder.Property(x => x.SourceClockOffsetMs).HasColumnName("source_clock_offset_ms").HasDefaultValue(0);
         builder.Property(x => x.ReceivedAt).HasColumnName("received_at").IsRequired();
+        builder.Property(x => x.GroupId).HasColumnName("group_id");
+
+        // Index on group_id for the per-group display counter query
+        // ("how many heats has Group A fired?"). Non-unique — one group can fire many heats.
+        builder.HasIndex(x => x.GroupId)
+            .HasDatabaseName("idx_race_start_times_group_id");
     }
 }

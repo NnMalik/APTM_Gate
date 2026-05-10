@@ -20,12 +20,50 @@ public sealed class SyncHubService : ISyncHubService
 
     public async Task<SyncPushResult> PushAsync(SyncPushPayload payload, CancellationToken ct = default)
     {
-        // Dedup by clientRecordId
+        // Dedup by clientRecordId. The AnyAsync check + the unique index on
+        // received_sync_data.client_record_id together protect against double-insert,
+        // but they're not atomic — under concurrent pushes (which the HHTs do) two
+        // requests can both pass AnyAsync and the loser hits the unique index.
+        // Phase 7 wraps the body in try/catch DbUpdateException to convert the loser's
+        // exception into the same Duplicate response the AnyAsync path returns,
+        // instead of bubbling a 500 that the HHT's sync queue would interpret as a
+        // transient failure and retry forever.
         var exists = await _db.ReceivedSyncData
             .AnyAsync(r => r.ClientRecordId == payload.ClientRecordId, ct);
 
         if (exists)
             return SyncPushResult.Duplicate(payload.ClientRecordId);
+
+        try
+        {
+            return await PushInternalAsync(payload, ct);
+        }
+        catch (DbUpdateException ex) when (IsClientRecordIdUniqueViolation(ex))
+        {
+            // Concurrent duplicate push — AnyAsync raced with another request that
+            // got there first. Treat as the same as the AnyAsync-detected duplicate:
+            // the row exists in the database, our job is done.
+            return SyncPushResult.Duplicate(payload.ClientRecordId);
+        }
+    }
+
+    /// <summary>
+    /// Inspects a DbUpdateException to determine whether it was caused by the
+    /// <c>received_sync_data.client_record_id</c> unique index. Postgres reports
+    /// these via SQLSTATE 23505 (unique_violation); we additionally pattern-match the
+    /// constraint/column name so we don't misclassify other unique-index breakages
+    /// (e.g. heat_completions.heat_id) as duplicates of this push.
+    /// </summary>
+    private static bool IsClientRecordIdUniqueViolation(DbUpdateException ex)
+    {
+        var message = (ex.InnerException?.Message ?? ex.Message) ?? string.Empty;
+        return message.Contains("23505")
+            && (message.Contains("client_record_id", StringComparison.OrdinalIgnoreCase)
+             || message.Contains("received_sync_data", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<SyncPushResult> PushInternalAsync(SyncPushPayload payload, CancellationToken ct = default)
+    {
 
         // If heat_completion, also upsert into heat_completions so the local display can
         // freeze its timer at the same moment the finish gate did. Idempotent — duplicate
@@ -97,17 +135,18 @@ public sealed class SyncHubService : ISyncHubService
                     });
                 }
 
-                // Void any processed_events that landed against this heat. Use
-                // raceStart's gun_start_time as the lower bound so we don't
-                // accidentally void events from an earlier (different) heat
-                // that happened to share the same heat number.
+                // Void any processed_events that landed against THIS specific heat
+                // (Phase 7). Switched from heat_number to heat_id keying so cancelling
+                // one operator group's heat 3 no longer cross-voids another group's
+                // heat 3 finishes. The gun-start lower bound is no longer needed —
+                // heat_id is unique on race_start_times so no temporal disambiguation
+                // is required, and processed_events created before Phase 7 have
+                // heat_id = NULL anyway and are safely excluded.
                 if (raceStart is not null)
                 {
-                    var lower = raceStart.GunStartTime;
                     await _db.ProcessedEvents
                         .Where(pe => pe.EventType == "finish"
-                                  && pe.HeatNumber == raceStart.HeatNumber
-                                  && pe.ReadTime >= lower
+                                  && pe.HeatId == raceStart.HeatId
                                   && !pe.Voided)
                         .ExecuteUpdateAsync(s => s.SetProperty(pe => pe.Voided, true), ct);
                 }
@@ -134,11 +173,13 @@ public sealed class SyncHubService : ISyncHubService
                         .Where(id => id != removePayload.CandidateId)
                         .ToArray();
 
+                    // Phase 7: switched from heat_number to heat_id so removing a
+                    // candidate from Group A's heat 3 doesn't void their finish in
+                    // Group B's heat 3 (a different race entirely).
                     await _db.ProcessedEvents
                         .Where(pe => pe.CandidateId == removePayload.CandidateId
-                                  && pe.HeatNumber == raceStart.HeatNumber
+                                  && pe.HeatId == raceStart.HeatId
                                   && pe.EventType == "finish"
-                                  && pe.ReadTime >= raceStart.GunStartTime
                                   && !pe.Voided)
                         .ExecuteUpdateAsync(s => s.SetProperty(pe => pe.Voided, true), ct);
                 }
@@ -182,7 +223,8 @@ public sealed class SyncHubService : ISyncHubService
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
                         SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
-                        ReceivedAt = now
+                        ReceivedAt = now,
+                        GroupId = racePayload.GroupId
                     });
                 }
             }
@@ -367,6 +409,16 @@ file sealed class RaceStartPayload
     public DateTimeOffset GunStartTime { get; set; }
     public double SourceClockOffsetMs { get; set; }
     public List<RaceStartCandidate>? Candidates { get; set; }
+
+    /// <summary>
+    /// Operator group that started this heat. Sent by HHTs running the new
+    /// group-aware code; nullable for back-compat with older HHTs and tests
+    /// running in legacy "no groups" mode (decision #1). Stored on
+    /// <c>race_start_times.group_id</c> for per-group display counters and
+    /// future audit logic. The matching algorithm at the finish gate doesn't
+    /// rely on this — it still keys on <c>candidate_ids</c> roster membership.
+    /// </summary>
+    public Guid? GroupId { get; set; }
 }
 
 file sealed class RaceStartCandidate

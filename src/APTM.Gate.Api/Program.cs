@@ -92,12 +92,16 @@ app.MapConfigEndpoints();
 app.MapSyncEndpoints();
 app.MapDisplayEndpoints();
 app.MapReaderEndpoints();
+app.MapReaderSettingsEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapHealthEndpoints();
 app.MapTokenEndpoints();
 app.MapLifecycleEndpoints();
 app.MapBufferEndpoints();
 app.MapHeatEndpoints();
+app.MapRaceDataEndpoints();
+app.MapActiveEventEndpoints();
+app.MapOperatorGroupEndpoints();
 
 // Auto-activate the buffer processor on Checkpoint NUCs. They sit at remote points along
 // the route with no operator nearby — without auto-activation a fresh checkpoint would

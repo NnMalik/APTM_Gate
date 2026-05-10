@@ -2,7 +2,6 @@ using System.Net.Sockets;
 using APTM.Gate.Core.Enums;
 using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,11 +19,15 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     private readonly ILogger<TcpReaderWorker> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IGateIdentityProvider _identityProvider;
-    private readonly string _readerHost;
-    private readonly int _readerPort;
-    private readonly int _reconnectDelayMs;
-    private readonly byte _defaultPower;
-    private readonly byte _epcFilterBits;
+    private readonly IReaderConfigProvider _readerConfigProvider;
+
+    // Per-connection snapshot of settings — captured at the start of each ConnectAndReadAsync
+    // iteration so a write to /gate/reader/settings is picked up on the next reconnect.
+    private string _readerHost = "127.0.0.1";
+    private int _readerPort = 27011;
+    private int _reconnectDelayMs = 5000;
+    private byte _defaultPower = 20;
+    private byte _epcFilterBits = 0;
 
     // TCP state
     private TcpClient? _client;
@@ -51,16 +54,27 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         ILogger<TcpReaderWorker> logger,
         IServiceScopeFactory scopeFactory,
         IGateIdentityProvider identityProvider,
-        IConfiguration configuration)
+        IReaderConfigProvider readerConfigProvider)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _identityProvider = identityProvider;
-        _readerHost = configuration["Reader:Host"] ?? "127.0.0.1";
-        _readerPort = int.TryParse(configuration["Reader:Port"], out var port) ? port : 27011;
-        _reconnectDelayMs = int.TryParse(configuration["Reader:ReconnectDelayMs"], out var delay) ? delay : 5000;
-        _defaultPower = byte.TryParse(configuration["Reader:DefaultPower"], out var power) ? power : (byte)20;
-        _epcFilterBits = byte.TryParse(configuration["Reader:EpcFilterBits"], out var filter) ? filter : (byte)0;
+        _readerConfigProvider = readerConfigProvider;
+    }
+
+    /// <summary>
+    /// Re-reads the active reader settings from the provider. Called at the start of each
+    /// reconnect iteration so a write to /gate/reader/settings takes effect within ~5s
+    /// without a service restart.
+    /// </summary>
+    private void RefreshSettingsSnapshot()
+    {
+        var s = _readerConfigProvider.Current;
+        _readerHost = s.Host;
+        _readerPort = s.Port;
+        _reconnectDelayMs = s.ReconnectDelayMs;
+        _defaultPower = (byte)Math.Clamp(s.DefaultPower, 0, 30);
+        _epcFilterBits = (byte)Math.Clamp(s.EpcFilterBits, 0, 128);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -80,6 +94,8 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             return;
         }
 
+        // Initial snapshot for the startup log line.
+        RefreshSettingsSnapshot();
         _logger.LogInformation("TcpReaderWorker starting — role {Role}, target {Host}:{Port}", role, _readerHost, _readerPort);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -118,6 +134,9 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     {
         // Clean up any previous connection
         DisposeConnection();
+
+        // Re-read settings every reconnect — picks up changes from /gate/reader/settings.
+        RefreshSettingsSnapshot();
 
         _client = new TcpClient { NoDelay = true, ReceiveBufferSize = 65536 };
 

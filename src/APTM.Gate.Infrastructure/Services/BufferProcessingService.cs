@@ -30,6 +30,50 @@ public sealed class BufferProcessingService : IBufferProcessingService
         _deviceCode = configuration["Gate:DeviceCode"] ?? "unknown";
     }
 
+    /// <summary>
+    /// Claims a batch of PENDING raw_tag_buffer rows under a row-level lock that other
+    /// concurrent processors will skip. Defends against the case where the background
+    /// worker and an operator-triggered <c>POST /gate/buffer/process-now</c> race for
+    /// the same rows — without this, both could SELECT the same PENDING ids, both
+    /// would insert duplicate processed_events, and the resulting unique-index breakage
+    /// would 500 the loser.
+    ///
+    /// PostgreSQL <c>FOR UPDATE SKIP LOCKED</c> only operates inside an active
+    /// transaction. The caller is responsible for committing the returned transaction
+    /// after the rows have been updated to PROCESSED (or rolling back on error). Rows
+    /// are returned tracked so the caller can mutate <c>Status</c> and SaveChangesAsync
+    /// will issue the right UPDATE.
+    /// </summary>
+    private async Task<(List<RawTagBuffer> Rows, Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? Tx)>
+        ClaimPendingAsync(int batchSize, CancellationToken ct)
+    {
+        // Begin a transaction with the default isolation so the row locks released only
+        // when we commit. Other workers calling SELECT … FOR UPDATE SKIP LOCKED will pass
+        // these rows over and pick the next available ones.
+        var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // FromSqlRaw + tracked entities so the caller can mutate Status. The
+            // {0} parameter is the LIMIT — Npgsql parameterises it correctly.
+            var rows = await _db.RawTagBuffers
+                .FromSqlRaw(
+                    @"SELECT * FROM raw_tag_buffer
+                      WHERE status = 'PENDING'
+                      ORDER BY id
+                      LIMIT {0}
+                      FOR UPDATE SKIP LOCKED",
+                    batchSize)
+                .ToListAsync(ct);
+            return (rows, tx);
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            tx.Dispose();
+            throw;
+        }
+    }
+
     public async Task<int> ProcessBatchAsync(int batchSize = 100, CancellationToken ct = default)
     {
         var identity = _identityProvider.Current;
@@ -56,13 +100,18 @@ public sealed class BufferProcessingService : IBufferProcessingService
         int batchSize,
         CancellationToken ct)
     {
-        var pendingRows = await _db.RawTagBuffers
-            .Where(r => r.Status == "PENDING")
-            .OrderBy(r => r.Id)
-            .Take(batchSize)
-            .ToListAsync(ct);
-
-        if (pendingRows.Count == 0) return 0;
+        // Claim rows under a row-level lock so concurrent invocations (worker +
+        // /buffer/process-now) don't double-process. Tx is committed at the end
+        // alongside the SaveChangesAsync that flips Status to PROCESSED.
+        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, ct);
+        if (tx is null) return 0;
+        try
+        {
+            if (pendingRows.Count == 0)
+            {
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
         var checkpointSequence = identity.CheckpointSequence;
         var distinctEpcs = pendingRows.Select(r => r.TagEPC).Distinct().ToList();
@@ -129,8 +178,19 @@ public sealed class BufferProcessingService : IBufferProcessingService
             processed++;
         }
 
-        await _db.SaveChangesAsync(ct);
-        return processed;
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return processed;
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+        finally
+        {
+            await tx.DisposeAsync();
+        }
     }
 
     /// <summary>
@@ -146,25 +206,29 @@ public sealed class BufferProcessingService : IBufferProcessingService
         var identity = _identityProvider.Current;
         if (identity is null) return 0;
 
-        var pendingRows = await _db.RawTagBuffers
-            .Where(r => r.Status == "PENDING")
-            .OrderBy(r => r.Id)
-            .Take(batchSize)
-            .ToListAsync(ct);
-
-        if (pendingRows.Count == 0) return 0;
-
-        var gateConfig = await _db.GateConfigs
-            .Where(g => g.IsActive)
-            .FirstOrDefaultAsync(ct);
-
-        if (gateConfig is null)
+        // Phase 7: claim under FOR UPDATE SKIP LOCKED so concurrent processors
+        // (worker + /buffer/process-now) don't pick the same rows.
+        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, ct);
+        if (tx is null) return 0;
+        try
         {
-            // No active config yet — leave reads PENDING so they can be processed once config
-            // arrives. Previously these were marked UNRESOLVED, which silently dropped data
-            // recorded before config-push.
-            return 0;
-        }
+            if (pendingRows.Count == 0)
+            {
+                await tx.CommitAsync(ct);
+                return 0;
+            }
+
+            var gateConfig = await _db.GateConfigs
+                .Where(g => g.IsActive)
+                .FirstOrDefaultAsync(ct);
+
+            if (gateConfig is null)
+            {
+                // No active config yet — leave reads PENDING so they can be processed once
+                // config arrives. Roll back so the row locks release without UPDATEs.
+                await tx.RollbackAsync(ct);
+                return 0;
+            }
 
         // Preload tag assignments for EPC resolution
         var epcs = pendingRows.Select(r => r.TagEPC).Distinct().ToList();
@@ -282,6 +346,7 @@ public sealed class BufferProcessingService : IBufferProcessingService
             decimal? durationSeconds = null;
             int? heatNumber = null;
             RaceStartTime? matchedRaceStart = null;
+            string? processedStatus = null;          // null = matched / not applicable
             if (eventType == "finish")
             {
                 if (raceStarts.Count == 0)
@@ -291,10 +356,56 @@ public sealed class BufferProcessingService : IBufferProcessingService
                     continue;
                 }
 
-                // Match candidate to their specific heat, fall back to latest start
+                // Match candidate to their specific heat by roster membership. With
+                // multiple parallel heats (one per operator group), each candidate is
+                // in at most one active heat, so this is unambiguous when groups are
+                // disjoint. We deliberately do NOT fall back to raceStarts[0] for
+                // unrostered finishes — guessing that a stranger ran in the most
+                // recent heat caused the cross-group elapsed-time corruption that
+                // motivated this rewrite (DESIGN_OPERATOR_GROUPS.md §6.3, Phase 7).
                 var raceStart = raceStarts
-                    .FirstOrDefault(r => r.CandidateIds is not null && r.CandidateIds.Contains(candidateId))
-                    ?? raceStarts[0];
+                    .FirstOrDefault(r => r.CandidateIds is not null && r.CandidateIds.Contains(candidateId));
+
+                if (raceStart is null)
+                {
+                    // Stray read — candidate was scanned at the finish line but isn't
+                    // in any active heat's roster. Common causes: a candidate from a
+                    // not-yet-started heat lingering nearby, a finished candidate
+                    // re-passing the gate, a wrong-tag mapping. Persist as UNRESOLVED
+                    // (no heat, no group, no duration) so the row exists for admin
+                    // review without being charged to the wrong race.
+                    candidateMap.TryGetValue(candidateId, out var unresolvedCandidate);
+                    if (unresolvedCandidate == null)
+                    {
+                        unresolvedCandidate = await _db.Candidates.FindAsync(new object[] { candidateId }, ct);
+                        if (unresolvedCandidate != null) candidateMap[candidateId] = unresolvedCandidate;
+                    }
+
+                    _db.ProcessedEvents.Add(new ProcessedEvent
+                    {
+                        CandidateId = candidateId,
+                        TagEPC = row.TagEPC,
+                        EventType = eventType,
+                        EventId = activeEventId,
+                        ReadTime = row.ReadTime,
+                        DurationSeconds = null,
+                        HeatNumber = null,
+                        HeatId = null,
+                        GroupId = null,
+                        Status = "UNRESOLVED",
+                        CheckpointSequence = gateConfig.CheckpointSequence,
+                        IsFirstRead = !prev.HasValue,
+                        CandidateName = unresolvedCandidate?.Name,
+                        JacketNumber = unresolvedCandidate?.JacketNumber,
+                        RawBufferId = row.Id,
+                        ProcessedAt = DateTimeOffset.UtcNow
+                    });
+                    lastReadAtByCandidate[candidateId] = row.ReadTime;
+                    row.Status = "PROCESSED";
+                    processed++;
+                    continue;
+                }
+
                 matchedRaceStart = raceStart;
 
                 // GunStartTime is already in gate-local time (adjusted at receipt in SyncHubService).
@@ -338,7 +449,16 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 CandidateName = candidate?.Name,
                 JacketNumber = candidate?.JacketNumber,
                 RawBufferId = row.Id,
-                ProcessedAt = DateTimeOffset.UtcNow
+                ProcessedAt = DateTimeOffset.UtcNow,
+                // Denormalised from the matched heat (finish events only). Lets per-group
+                // display counters run as a single indexed query instead of joining.
+                // NULL for checkpoint events and legacy heats started without group context.
+                GroupId = matchedRaceStart?.GroupId,
+                // HeatId is the load-bearing identifier going forward — voids and
+                // completions key on it instead of HeatNumber, which prevents
+                // cross-group cross-contamination on number collisions.
+                HeatId = matchedRaceStart?.HeatId,
+                Status = processedStatus
             };
 
             _db.ProcessedEvents.Add(processedEvent);
@@ -359,16 +479,28 @@ public sealed class BufferProcessingService : IBufferProcessingService
             }
         }
 
-        await _db.SaveChangesAsync(ct);
+            await _db.SaveChangesAsync(ct);
 
-        // Heat-completion detection happens AFTER the finish events are flushed so the
-        // count query sees the just-inserted rows.
-        if (heatsTouched.Count > 0)
-        {
-            await DetectHeatCompletionsAsync(heatsTouched, raceStarts, activeEventId, ct);
+            // Heat-completion detection happens AFTER the finish events are flushed so
+            // the count query sees the just-inserted rows. Runs inside the same
+            // transaction so a completion row + the finishing event commit atomically.
+            if (heatsTouched.Count > 0)
+            {
+                await DetectHeatCompletionsAsync(heatsTouched, raceStarts, activeEventId, ct);
+            }
+
+            await tx.CommitAsync(ct);
+            return processed;
         }
-
-        return processed;
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+        finally
+        {
+            await tx.DisposeAsync();
+        }
     }
 
     /// <summary>
@@ -402,13 +534,14 @@ public sealed class BufferProcessingService : IBufferProcessingService
             var roster = raceStart.CandidateIds;
             var heatNumber = raceStart.HeatNumber;
 
-            // Strict roster filter: only count finishes by candidates actually in this heat.
-            // Without this, a stranger that fell back to this heat's number would inflate the
-            // count past expected.
+            // Strict roster filter, keyed on heat_id (Phase 7). Previously used
+            // heat_number which collided across operator groups — Trainer-1's heat 3
+            // and Trainer-2's heat 3 share a number but are different races. heat_id
+            // is unique on race_start_times so this is unambiguous.
             var rosterFinishesQuery = _db.ProcessedEvents
                 .Where(pe => pe.EventType == "finish"
                           && pe.IsFirstRead
-                          && pe.HeatNumber == heatNumber
+                          && pe.HeatId == heatId
                           && pe.CandidateId != null
                           && roster.Contains(pe.CandidateId.Value));
 
