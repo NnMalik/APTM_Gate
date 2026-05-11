@@ -18,7 +18,11 @@
       "Bash(find /c/Users/DeLL/source/repos/APTM_GATE -name \"*.cs\" -exec grep -l \"HttpClient\\\\|HttpPost\\\\|PostAsync\\\\|SendAsync\" {} \\\\;)",
       "Bash(find /c/Users/DeLL/source/repos -name \"*.cs\" -exec grep -l \"RaceResultsIngestRequest\\\\|/api/race-results\" {} \\\\;)",
       "Bash(find /c/Users/DeLL/source/repos/APTM_GATE -name \"*.cs\" -exec grep -l \"ConfigPackageDto\" {} \\\\;)",
-      "Bash(./gradlew assembleDebug)"
+      "Bash(./gradlew assembleDebug)",
+      "PowerShell(& \"deploy\\\\windows\\\\build-windows-installer.ps1\")",
+      "Bash(stat -c '%y  %n' deploy/APTM-Gate-Installer.zip deploy/APTM-Gate-Installer/backend/APTM.Gate.Infrastructure.dll 2>/dev/null && echo '---contents---' && ls deploy/APTM-Gate-Installer/ && echo '---backend dlls---' && ls deploy/APTM-Gate-Installer/backend/ | head -20)",
+      "Read(//c/Users/DeLL/source/repos/APTM_GATE/**)",
+      "PowerShell(& \"deploy\\\\build-installer.ps1\")"
     ]
   }
 }

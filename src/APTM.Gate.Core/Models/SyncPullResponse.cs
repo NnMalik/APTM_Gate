@@ -8,6 +8,15 @@ public sealed class SyncPullResponse
     public List<HeatCompletionDto> HeatCompletions { get; set; } = [];
     public long HighWaterMark { get; set; }
     public long? SyncDataHighWaterMs { get; set; }
+
+    /// <summary>
+    /// The NUC's wall-clock at the moment this response was built. Lets the Field app
+    /// compute the per-gate clock offset (NUC vs tablet) for checkpoint verification
+    /// and downstream time-window event attribution. Especially important for headless
+    /// checkpoint NUCs where reads carry only tag + readTime — the trainer laptop uses
+    /// this to detect drift before reconciling reads into events.
+    /// </summary>
+    public DateTimeOffset ServerTime { get; set; }
 }
 
 public sealed class ReceivedSyncDataDto

@@ -346,7 +346,10 @@ public sealed class SyncHubService : ISyncHubService
             HighWaterMark = highWaterMark,
             SyncDataHighWaterMs = syncData.Count > 0
                 ? syncData.Max(s => s.ReceivedAt).ToUnixTimeMilliseconds()
-                : sinceSyncMs
+                : sinceSyncMs,
+            // Stamped at response build time so the Field app can compute (and surface)
+            // the per-gate clock drift before any time-window attribution downstream.
+            ServerTime = DateTimeOffset.UtcNow
         };
     }
 
