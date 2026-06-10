@@ -45,7 +45,7 @@ public sealed class BufferProcessingService : IBufferProcessingService
     /// will issue the right UPDATE.
     /// </summary>
     private async Task<(List<RawTagBuffer> Rows, Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? Tx)>
-        ClaimPendingAsync(int batchSize, CancellationToken ct)
+        ClaimPendingAsync(int batchSize, bool scopeToOldestEvent, CancellationToken ct)
     {
         // Begin a transaction with the default isolation so the row locks released only
         // when we commit. Other workers calling SELECT … FOR UPDATE SKIP LOCKED will pass
@@ -55,14 +55,31 @@ public sealed class BufferProcessingService : IBufferProcessingService
         {
             // FromSqlRaw + tracked entities so the caller can mutate Status. The
             // {0} parameter is the LIMIT — Npgsql parameterises it correctly.
+            //
+            // When scopeToOldestEvent is set (the finish pipeline), the batch is
+            // restricted to a single event — the one owning the oldest PENDING row.
+            // event_id is stamped at ingestion, so this lets the processor compute
+            // elapsed time against the right gun even across an event switch, and
+            // drains each event's backlog in turn over successive worker cycles.
+            // IS NOT DISTINCT FROM keeps the match null-safe: reads captured before
+            // any config was loaded carry event_id = NULL and are still drained.
+            var sql = scopeToOldestEvent
+                ? @"SELECT * FROM raw_tag_buffer
+                    WHERE status = 'PENDING'
+                      AND event_id IS NOT DISTINCT FROM (
+                          SELECT event_id FROM raw_tag_buffer
+                          WHERE status = 'PENDING' ORDER BY id LIMIT 1)
+                    ORDER BY id
+                    LIMIT {0}
+                    FOR UPDATE SKIP LOCKED"
+                : @"SELECT * FROM raw_tag_buffer
+                    WHERE status = 'PENDING'
+                    ORDER BY id
+                    LIMIT {0}
+                    FOR UPDATE SKIP LOCKED";
+
             var rows = await _db.RawTagBuffers
-                .FromSqlRaw(
-                    @"SELECT * FROM raw_tag_buffer
-                      WHERE status = 'PENDING'
-                      ORDER BY id
-                      LIMIT {0}
-                      FOR UPDATE SKIP LOCKED",
-                    batchSize)
+                .FromSqlRaw(sql, batchSize)
                 .ToListAsync(ct);
             return (rows, tx);
         }
@@ -103,7 +120,8 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // Claim rows under a row-level lock so concurrent invocations (worker +
         // /buffer/process-now) don't double-process. Tx is committed at the end
         // alongside the SaveChangesAsync that flips Status to PROCESSED.
-        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, ct);
+        // Checkpoint has no event context, so it claims across all events.
+        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, scopeToOldestEvent: false, ct);
         if (tx is null) return 0;
         try
         {
@@ -207,8 +225,10 @@ public sealed class BufferProcessingService : IBufferProcessingService
         if (identity is null) return 0;
 
         // Phase 7: claim under FOR UPDATE SKIP LOCKED so concurrent processors
-        // (worker + /buffer/process-now) don't pick the same rows.
-        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, ct);
+        // (worker + /buffer/process-now) don't pick the same rows. The finish
+        // pipeline claims one event at a time (oldest pending event first) so
+        // elapsed time is always computed against that event's gun start.
+        var (pendingRows, tx) = await ClaimPendingAsync(batchSize, scopeToOldestEvent: true, ct);
         if (tx is null) return 0;
         try
         {
@@ -269,6 +289,11 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // Without this filter the cancelled gun-start would still be picked up by
         // the FirstOrDefault and the new finish times would be computed against the
         // wrong gun (or worse, rejected by the elapsed≤0 guard).
+        // The batch was claimed for a single event (see ClaimPendingAsync) — the event
+        // that owns these reads, stamped at ingestion. Reads captured before any config
+        // was loaded carry event_id = NULL and fall back to the current active event.
+        var activeEventId = pendingRows[0].EventId ?? gateConfig.ActiveEventId;
+
         List<RaceStartTime> raceStarts = [];
         if (eventType == "finish")
         {
@@ -277,9 +302,15 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 .Select(hc => hc.HeatId)
                 .ToListAsync(ct);
 
+            // Event-scoped lookup: only this event's gun starts are eligible, so a
+            // candidate who runs multiple events is matched to the correct gun. Scoped
+            // to this test instance too. Legacy rows with no event_id fall back to the
+            // old "received since the current config was applied" window.
             raceStarts = await _db.RaceStartTimes
-                .Where(r => r.ReceivedAt >= gateConfig.ReceivedAt
-                         && !cancelledHeatIds.Contains(r.HeatId))
+                .Where(r => !cancelledHeatIds.Contains(r.HeatId)
+                         && (r.TestInstanceId == null || r.TestInstanceId == gateConfig.TestInstanceId)
+                         && (r.EventId == activeEventId
+                              || (r.EventId == null && r.ReceivedAt >= gateConfig.ReceivedAt)))
                 .OrderByDescending(r => r.ReceivedAt)
                 .ToListAsync(ct);
         }
@@ -288,12 +319,16 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // Scoped to (candidate, active event, checkpoint sequence).
         // Voided rows are excluded — they're stale reads from a cancelled heat or
         // a removed candidate and shouldn't block the next valid finish.
-        var activeEventId = gateConfig.ActiveEventId;
+        // UNRESOLVED rows are excluded too: a false-starter who crosses the finish
+        // during an aborted run lands an UNRESOLVED event (no heat, no duration).
+        // Counting it in the cooldown would suppress the candidate's REAL finish in
+        // the re-run if it fell inside the dedup window — leaving them with no time.
         var resolvedCandidateIds = tagMap.Values.Distinct().ToList();
 
         var dedupQuery = _db.ProcessedEvents
             .Where(pe => pe.CandidateId != null
                       && !pe.Voided
+                      && pe.Status != "UNRESOLVED"
                       && resolvedCandidateIds.Contains(pe.CandidateId.Value));
 
         dedupQuery = activeEventId.HasValue

@@ -88,9 +88,14 @@ public sealed class GateConfigService : IGateConfigService
                 // If not fully synced, old data remains (will be collected on next pull)
             }
 
-            // Truncate config tables + race start times (stale starts from previous events must not affect new elapsed calculations)
-            // operator_group cascades to operator_group_candidate / operator_group_assignment via FK.
-            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates, race_start_times, operator_group CASCADE", ct);
+            // Truncate config tables. race_start_times is intentionally NOT truncated here:
+            // gun starts are event-scoped now (race_start_times.event_id + test_instance_id),
+            // so re-pushing / updating the same test instance preserves already-collected
+            // starts, and the finish processor still filters out anything from a different
+            // event. Race data is only wiped on an actual test-instance switch (the
+            // conditional block above). operator_group cascades to
+            // operator_group_candidate / operator_group_assignment via FK.
+            await _db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE scoring_statuses, scoring_types, test_events, checkpoint_config, tag_assignments, candidates, operator_group CASCADE", ct);
 
             // Insert candidates
             foreach (var c in config.Candidates)

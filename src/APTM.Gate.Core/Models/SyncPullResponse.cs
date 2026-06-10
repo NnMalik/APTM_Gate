@@ -35,6 +35,13 @@ public sealed class RaceStartTimeDto
     public int HeatNumber { get; set; }
     public DateTimeOffset GunStartTime { get; set; }
     public Guid SourceDeviceId { get; set; }
+
+    /// <summary>
+    /// The event (TestEvent.EventId) this heat belongs to. Null for legacy rows
+    /// created before event scoping. Lets the puller (and APTM Main) reconcile
+    /// finish results per event at end of test.
+    /// </summary>
+    public int? EventId { get; set; }
 }
 
 /// <summary>

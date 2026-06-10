@@ -18,6 +18,7 @@ public class RawTagBufferConfiguration : IEntityTypeConfiguration<RawTagBuffer>
         builder.Property(x => x.Status).HasColumnName("status").HasMaxLength(20).HasDefaultValue("PENDING").IsRequired();
         builder.Property(x => x.IsDuplicate).HasColumnName("is_duplicate").HasDefaultValue(false).IsRequired();
         builder.Property(x => x.InsertedAt).HasColumnName("inserted_at").IsRequired();
+        builder.Property(x => x.EventId).HasColumnName("event_id");
         builder.HasIndex(x => x.Status).HasDatabaseName("idx_raw_tag_buffer_status").HasFilter("status = 'PENDING'");
     }
 }

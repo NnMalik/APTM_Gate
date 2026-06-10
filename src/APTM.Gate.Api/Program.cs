@@ -93,6 +93,7 @@ app.MapSyncEndpoints();
 app.MapDisplayEndpoints();
 app.MapReaderEndpoints();
 app.MapReaderSettingsEndpoints();
+app.MapEpcFilterEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapHealthEndpoints();
 app.MapTokenEndpoints();

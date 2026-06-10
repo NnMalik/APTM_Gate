@@ -23,6 +23,7 @@ public class GateDbContext : DbContext
     public DbSet<TestEventEntity> TestEvents => Set<TestEventEntity>();
     public DbSet<AcceptedTokenEntity> AcceptedTokens => Set<AcceptedTokenEntity>();
     public DbSet<ReaderConfigEntity> ReaderConfigs => Set<ReaderConfigEntity>();
+    public DbSet<EpcFilterEntity> EpcFilters => Set<EpcFilterEntity>();
     public DbSet<OperatorGroupEntity> OperatorGroups => Set<OperatorGroupEntity>();
     public DbSet<OperatorGroupCandidateEntity> OperatorGroupCandidates => Set<OperatorGroupCandidateEntity>();
     public DbSet<OperatorGroupAssignmentEntity> OperatorGroupAssignments => Set<OperatorGroupAssignmentEntity>();

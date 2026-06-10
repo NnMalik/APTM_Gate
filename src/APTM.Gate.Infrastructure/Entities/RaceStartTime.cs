@@ -21,4 +21,20 @@ public class RaceStartTime
     /// disjoint.
     /// </summary>
     public Guid? GroupId { get; set; }
+
+    /// <summary>
+    /// The event (TestEvent.EventId) this heat belongs to. Sent by the HHT in the
+    /// race_start payload; falls back to the gate's active event at receipt when an
+    /// older HHT omits it. Lets the finish processor match a finish read to the gun
+    /// start of the *same* event — critical when a candidate runs multiple events.
+    /// Nullable for back-compat with rows created before event scoping.
+    /// </summary>
+    public int? EventId { get; set; }
+
+    /// <summary>
+    /// The test instance this heat belongs to, stamped from the gate's active config
+    /// at receipt. Nullable for legacy rows. Scopes race-start lookups so stale starts
+    /// from a previous test instance never leak into a new one.
+    /// </summary>
+    public Guid? TestInstanceId { get; set; }
 }

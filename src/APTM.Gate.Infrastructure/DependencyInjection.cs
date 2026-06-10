@@ -19,9 +19,12 @@ public static class DependencyInjection
         services.AddSingleton<IGateStatusProvider, GateStatusProvider>();
         services.AddSingleton<IGateIdentityProvider, GateIdentityProvider>();
         services.AddSingleton<IReaderConfigProvider, ReaderConfigProvider>();
+        services.AddSingleton<IEpcFilterProvider, EpcFilterProvider>();
+        services.AddSingleton<ISystemControlService, SystemControlService>();
         services.AddScoped<IGateConfigService, GateConfigService>();
         services.AddScoped<IGateIdentityService, GateIdentityService>();
         services.AddScoped<IReaderConfigService, ReaderConfigService>();
+        services.AddScoped<IEpcFilterService, EpcFilterService>();
         services.AddScoped<ITagBufferService, TagBufferService>();
         services.AddScoped<IBufferProcessingService, BufferProcessingService>();
         services.AddScoped<ISyncHubService, SyncHubService>();

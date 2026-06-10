@@ -97,14 +97,13 @@ public sealed class SyncHubService : ISyncHubService
 
         // If race_cancel, mark a HeatCompletion(closure_reason='cancelled') and
         // void any finish events that landed against this heat. Idempotent —
-        // a second race_cancel for the same heat is a no-op (HeatId is unique
-        // on heat_completions).
+        // a second race_cancel for the same heat re-stamps the same reason.
         //
         // We don't remove the matching RaceStartTime — keeping it lets the
         // gate retain the audit trail and lets BufferProcessingService skip
         // it via the cancel-aware roster query without losing data. A re-fired
-        // heat with the same heat number arrives as a new RaceStartTime row
-        // (new HeatId) and wins the OrderByDescending lookup.
+        // heat (restart) arrives as a new RaceStartTime row with a fresh HeatId
+        // and wins the heat-candidate matching.
         if (string.Equals(payload.DataType, "race_cancel", StringComparison.OrdinalIgnoreCase))
         {
             var cancelPayload = payload.Payload.Deserialize<RaceCancelPayload>(
@@ -114,10 +113,17 @@ public sealed class SyncHubService : ISyncHubService
                 var raceStart = await _db.RaceStartTimes
                     .FirstOrDefaultAsync(r => r.HeatId == cancelPayload.HeatId, ct);
 
-                var existsCompletion = await _db.HeatCompletions
-                    .AnyAsync(hc => hc.HeatId == cancelPayload.HeatId, ct);
+                // Upsert the completion as 'cancelled'. A heat may already carry a
+                // completion row — most importantly an AUTO-completion written when
+                // the roster finished before the operator aborted. In that case we
+                // MUST flip closure_reason to 'cancelled': BufferProcessingService
+                // only excludes closure_reason='cancelled' from gun-start matching,
+                // so leaving it 'auto' would keep the heat's gun live even though we
+                // void its finishes just below — voided events but a live gun.
+                var existingCompletion = await _db.HeatCompletions
+                    .FirstOrDefaultAsync(hc => hc.HeatId == cancelPayload.HeatId, ct);
 
-                if (!existsCompletion)
+                if (existingCompletion is null)
                 {
                     _db.HeatCompletions.Add(new HeatCompletion
                     {
@@ -133,6 +139,19 @@ public sealed class SyncHubService : ISyncHubService
                         SourceDeviceCode = payload.DeviceCode,
                         ReceivedAt = DateTimeOffset.UtcNow
                     });
+                }
+                else if (!string.Equals(existingCompletion.ClosureReason, "cancelled",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    // Heat had auto-completed (or closed some other way) before the
+                    // abort. Re-stamp it as cancelled so downstream matching and the
+                    // field-app exclusion treat it consistently.
+                    existingCompletion.ClosureReason = "cancelled";
+                    existingCompletion.CompletedAt = cancelPayload.CancelledAt == default
+                        ? DateTimeOffset.UtcNow
+                        : cancelPayload.CancelledAt;
+                    existingCompletion.FinishedCount = 0;       // not meaningful on cancel
+                    existingCompletion.LastCandidateId = null;
                 }
 
                 // Void any processed_events that landed against THIS specific heat
@@ -212,6 +231,15 @@ public sealed class SyncHubService : ISyncHubService
                     if (adjustedGunStart > now)
                         adjustedGunStart = now;
 
+                    // Event scope: prefer the eventId the HHT put in the payload; fall
+                    // back to the gate's own active event when an older HHT omits it.
+                    // test_instance_id is always stamped from the active config so a
+                    // race-start lookup never leaks across test instances.
+                    var raceGateConfig = await _db.GateConfigs
+                        .Where(g => g.IsActive)
+                        .Select(g => new { g.ActiveEventId, g.TestInstanceId })
+                        .FirstOrDefaultAsync(ct);
+
                     _db.RaceStartTimes.Add(new RaceStartTime
                     {
                         Id = Guid.NewGuid(),
@@ -224,7 +252,9 @@ public sealed class SyncHubService : ISyncHubService
                             .Select(c => c.CandidateId).ToArray() ?? [],
                         SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
                         ReceivedAt = now,
-                        GroupId = racePayload.GroupId
+                        GroupId = racePayload.GroupId,
+                        EventId = (int?)racePayload.EventId ?? raceGateConfig?.ActiveEventId,
+                        TestInstanceId = raceGateConfig?.TestInstanceId
                     });
                 }
             }
@@ -270,7 +300,10 @@ public sealed class SyncHubService : ISyncHubService
                 IsFirstRead = pe.IsFirstRead,
                 CandidateName = pe.CandidateName ?? "",
                 JacketNumber = pe.JacketNumber,
-                ProcessedAt = pe.ProcessedAt
+                ProcessedAt = pe.ProcessedAt,
+                HeatId = pe.HeatId,
+                Voided = pe.Voided,
+                Status = pe.Status
             })
             .ToListAsync(ct);
 
@@ -303,7 +336,8 @@ public sealed class SyncHubService : ISyncHubService
                 HeatId = r.HeatId,
                 HeatNumber = r.HeatNumber,
                 GunStartTime = r.GunStartTime,
-                SourceDeviceId = r.SourceDeviceId
+                SourceDeviceId = r.SourceDeviceId,
+                EventId = r.EventId
             })
             .ToListAsync(ct);
 
@@ -422,6 +456,16 @@ file sealed class RaceStartPayload
     /// rely on this — it still keys on <c>candidate_ids</c> roster membership.
     /// </summary>
     public Guid? GroupId { get; set; }
+
+    /// <summary>
+    /// The event (TestEvent.EventId) this heat belongs to. Sent by HHTs running the
+    /// event-scoped code; nullable for back-compat with older HHTs — the gate then
+    /// falls back to its own active event at receipt. Stored on
+    /// <c>race_start_times.event_id</c> so the finish processor matches a finish read
+    /// to the gun start of the same event. <c>double?</c> for the same Gson numeric
+    /// quirk as the other numeric fields.
+    /// </summary>
+    public double? EventId { get; set; }
 }
 
 file sealed class RaceStartCandidate
