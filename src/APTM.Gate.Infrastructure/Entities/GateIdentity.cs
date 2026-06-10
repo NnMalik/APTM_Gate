@@ -15,6 +15,13 @@ public class GateIdentity
     /// <summary>Required iff <see cref="Role"/> == Checkpoint; null otherwise.</summary>
     public int? CheckpointSequence { get; set; }
 
+    /// <summary>
+    /// Operator-facing name/label for this gate (e.g. "River Bend Checkpoint"). Optional.
+    /// Set at pre-flash (appsettings) or by the field app via PUT /gate/identity. Renaming
+    /// does not require a service restart.
+    /// </summary>
+    public string? Name { get; set; }
+
     /// <summary>Should match Gate:DeviceCode in appsettings — sanity field for cross-checking.</summary>
     public string DeviceCode { get; set; } = default!;
 

@@ -96,11 +96,13 @@ app.MapReaderSettingsEndpoints();
 app.MapEpcFilterEndpoints();
 app.MapDiagnosticsEndpoints();
 app.MapHealthEndpoints();
+app.MapTimeEndpoints();
 app.MapTokenEndpoints();
 app.MapLifecycleEndpoints();
 app.MapBufferEndpoints();
 app.MapHeatEndpoints();
 app.MapRaceDataEndpoints();
+app.MapCheckpointEndpoints();
 app.MapActiveEventEndpoints();
 app.MapOperatorGroupEndpoints();
 

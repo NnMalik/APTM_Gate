@@ -12,8 +12,6 @@ DB_NAME="aptm_gate"
 DB_USER="aptm"
 DB_PASS="AptmGate@2024"
 KESTREL_PORT=5000
-WIFI_PASS="AptmGate@2024"
-WIFI_CHANNEL=6
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Colors
@@ -87,13 +85,32 @@ if command -v psql &>/dev/null && systemctl is-active --quiet postgresql; then
 else
     warn "PostgreSQL not found or not running. Attempting install..."
 
-    # Check for offline .deb packages
-    OFFLINE_DEBS=$(find "$SCRIPT_DIR/prerequisites" -name "postgresql*.deb" 2>/dev/null | head -1)
+    # Offline packages: prefer a dedicated prerequisites/postgresql/ folder holding the
+    # COMPLETE dependency set (postgresql-16 + postgresql-common + libpq5 + ssl-cert + ...).
+    # See prerequisites/postgresql/README.txt for how to gather it (Docker one-liner).
+    PG_DIR=""
+    if ls "$SCRIPT_DIR/prerequisites/postgresql"/*.deb >/dev/null 2>&1; then
+        PG_DIR="$SCRIPT_DIR/prerequisites/postgresql"
+    elif ls "$SCRIPT_DIR/prerequisites"/postgresql*.deb >/dev/null 2>&1; then
+        # Legacy/flat layout: deps must also be present alongside as *.deb.
+        PG_DIR="$SCRIPT_DIR/prerequisites"
+    fi
 
-    if [ -n "$OFFLINE_DEBS" ]; then
-        info "Installing from offline .deb packages..."
-        dpkg -i "$SCRIPT_DIR/prerequisites"/postgresql*.deb 2>/dev/null || true
-        apt-get -f install -y -qq
+    if [ -n "$PG_DIR" ]; then
+        info "Installing PostgreSQL from offline packages in $PG_DIR ..."
+        # Install the whole set at once so inter-package dependencies resolve locally
+        # (dpkg orders them itself). No network needed if the set is complete.
+        dpkg -i "$PG_DIR"/*.deb 2>/dev/null || true
+        # -f fixes any leftover ordering; reaches the network only if one is available
+        # and the offline set was incomplete.
+        apt-get -f install -y -qq 2>/dev/null || true
+
+        if ! command -v psql &>/dev/null; then
+            fail "PostgreSQL install incomplete. The offline set in $PG_DIR is missing dependencies. \
+It must include ALL .debs apt would pull (libpq5, ssl-cert, postgresql-common, \
+postgresql-client-common, postgresql-client-16, postgresql-16). See \
+prerequisites/postgresql/README.txt."
+        fi
         ok "PostgreSQL installed from offline packages"
     else
         info "No offline packages. Trying online install..."
@@ -189,41 +206,110 @@ chown -R root:root "$INSTALL_DIR"
 
 ok "Backend deployed to $INSTALL_DIR"
 
-# â”€â”€ Step 5: Interactive configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â”€â”€ Step 5: Per-NUC configuration (identity + reader + connection) â”€â”€â”€â”€â”€â”€â”€â”€
 echo ""
 info "[5/11] Configuration..."
 
 CONFIG_FILE="$INSTALL_DIR/appsettings.Production.json"
 
+# Best-effort readers for prefilling defaults from any existing config.
+cfg_get()     { grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$CONFIG_FILE" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' || true; }
+cfg_get_num() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*[0-9]\+" "$CONFIG_FILE" 2>/dev/null | head -1 | grep -o '[0-9]\+$' || true; }
+
+GATE_DEVICE_CODE="$(cfg_get DeviceCode)"; GATE_DEVICE_CODE="${GATE_DEVICE_CODE:-gate-01}"
+ACCEPTED_TOKEN="$(cfg_get AcceptedToken)"; ACCEPTED_TOKEN="${ACCEPTED_TOKEN:-Tab-01}"
+READER_HOST="$(cfg_get Host)"; READER_HOST="${READER_HOST:-192.168.0.250}"
+READER_PORT="$(cfg_get_num Port)"; READER_PORT="${READER_PORT:-27011}"
+DEFAULT_POWER="$(cfg_get_num DefaultPower)"; DEFAULT_POWER="${DEFAULT_POWER:-20}"
+ROLE="$(cfg_get Role)"
+GATE_NAME="$(cfg_get Name)"
+CHECKPOINT_SEQUENCE="$(cfg_get_num CheckpointSequence)"
+
 echo ""
-echo -e "  Current settings (from appsettings.Production.json):"
-echo -e "  ${CYAN}Gate DeviceCode${NC}: $(grep -o '"DeviceCode"[^,]*' "$CONFIG_FILE" | head -1 | cut -d'"' -f4)"
-echo -e "  ${CYAN}Accepted Token${NC} : $(grep -o '"AcceptedToken"[^,]*' "$CONFIG_FILE" | head -1 | cut -d'"' -f4)"
-echo -e "  ${CYAN}Reader Host${NC}    : $(grep -o '"Host"[^,]*' "$CONFIG_FILE" | head -1 | cut -d'"' -f4)"
-echo -e "  ${CYAN}Reader Port${NC}    : $(grep -o '"Port"[^,]*' "$CONFIG_FILE" | head -1 | grep -o '[0-9]*')"
+echo -e "  Enter this gate's settings (press Enter to keep the shown default)."
 echo ""
 
-GATE_DEVICE_CODE=$(grep -o '"DeviceCode"[^,]*' "$CONFIG_FILE" | head -1 | cut -d'"' -f4)
+# Role drives pre-flash identity, the display served, and the processing pipeline.
+while :; do
+    read -p "  Gate role --(s)tart, (c)heckpoint, (f)inish [${ROLE:-c}]: " R
+    R="${R:-${ROLE:-c}}"
+    case "$R" in
+        s|S|start|Start)            ROLE="Start"; break ;;
+        c|C|checkpoint|Checkpoint)  ROLE="Checkpoint"; break ;;
+        f|F|finish|Finish)          ROLE="Finish"; break ;;
+        *) warn "  Enter s, c, or f." ;;
+    esac
+done
 
-read -p "  Edit configuration now? [y/N]: " EDIT_CONFIG
-if [[ "$EDIT_CONFIG" =~ ^[Yy]$ ]]; then
-    read -p "  Gate DeviceCode [$GATE_DEVICE_CODE]: " NEW_CODE
-    if [ -n "$NEW_CODE" ]; then
-        sed -i "s/\"DeviceCode\": \"[^\"]*\"/\"DeviceCode\": \"$NEW_CODE\"/" "$CONFIG_FILE"
-        GATE_DEVICE_CODE="$NEW_CODE"
+if [ "$ROLE" = "Checkpoint" ]; then
+    read -p "  Checkpoint sequence (1,2,3...) [${CHECKPOINT_SEQUENCE:-1}]: " S
+    CHECKPOINT_SEQUENCE="${S:-${CHECKPOINT_SEQUENCE:-1}}"
+else
+    CHECKPOINT_SEQUENCE=""
+fi
+
+read -p "  Gate name (e.g. River Bend) [${GATE_NAME}]: " N; [ -n "$N" ] && GATE_NAME="$N"
+read -p "  Gate DeviceCode [$GATE_DEVICE_CODE]: " V; [ -n "$V" ] && GATE_DEVICE_CODE="$V"
+read -p "  Accepted device token [$ACCEPTED_TOKEN]: " V; [ -n "$V" ] && ACCEPTED_TOKEN="$V"
+read -p "  UHF Reader IP [$READER_HOST]: " V; [ -n "$V" ] && READER_HOST="$V"
+read -p "  UHF Reader port [$READER_PORT]: " V; [ -n "$V" ] && READER_PORT="$V"
+
+# CheckpointSequence is a JSON number for checkpoints, null otherwise.
+if [ "$ROLE" = "Checkpoint" ] && [ -n "$CHECKPOINT_SEQUENCE" ]; then
+    SEQ_JSON="$CHECKPOINT_SEQUENCE"
+else
+    SEQ_JSON="null"
+fi
+
+# Regenerate the production config from the collected values so the Gate:Identity
+# block is always present â€” PostgresInitService pre-flash-seeds the role on first
+# boot (no field provisioning needed for a fresh NUC).
+[ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+cat > "$CONFIG_FILE" << EOF
+{
+  "ConnectionStrings": {
+    "GateDb": "Host=localhost;Port=5432;Database=$DB_NAME;Username=$DB_USER;Password=$DB_PASS"
+  },
+  "Reader": {
+    "Host": "$READER_HOST",
+    "Port": $READER_PORT,
+    "ReconnectDelayMs": 5000,
+    "DefaultPower": $DEFAULT_POWER,
+    "EpcFilterBits": 0
+  },
+  "Gate": {
+    "DeviceCode": "$GATE_DEVICE_CODE",
+    "AcceptedToken": "$ACCEPTED_TOKEN",
+    "AllowRemotePowerOff": true,
+    "PowerOffCommand": "systemctl poweroff",
+    "Identity": {
+      "Role": "$ROLE",
+      "CheckpointSequence": $SEQ_JSON,
+      "Name": "$GATE_NAME"
+    }
+  },
+  "Kestrel": {
+    "Endpoints": { "Http": { "Url": "http://0.0.0.0:$KESTREL_PORT" } }
+  },
+  "Logging": {
+    "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning", "Npgsql": "Warning" }
+  }
+}
+EOF
+chown root:root "$CONFIG_FILE"
+ok "Config written: role=$ROLE${CHECKPOINT_SEQUENCE:+ seq=$CHECKPOINT_SEQUENCE} name='${GATE_NAME}' device=$GATE_DEVICE_CODE"
+
+# Pre-flash only seeds an EMPTY identity. If this NUC was already provisioned with a
+# different role (re-running setup on a live gate), offer to clear it so the new role
+# takes effect. On a fresh NUC the table doesn't exist yet and this is a no-op.
+OLD_ROLE=$(sudo -u postgres psql -tAqc "SELECT role FROM gate_identity LIMIT 1;" "$DB_NAME" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$OLD_ROLE" ] && [ "$OLD_ROLE" != "$ROLE" ]; then
+    warn "Gate is already provisioned as '$OLD_ROLE' in the database; pre-flash will NOT override it."
+    read -p "  Reset stored identity to '$ROLE'? This clears race data. [y/N]: " RESET
+    if [[ "$RESET" =~ ^[Yy]$ ]]; then
+        sudo -u postgres psql -d "$DB_NAME" -c "TRUNCATE TABLE gate_identity, raw_tag_buffer, processed_events RESTART IDENTITY CASCADE;" 2>/dev/null || true
+        ok "Stored identity cleared; role=$ROLE will seed on next service start."
     fi
-
-    read -p "  Accepted Token: " NEW_TOKEN
-    if [ -n "$NEW_TOKEN" ]; then
-        sed -i "s/\"AcceptedToken\": \"[^\"]*\"/\"AcceptedToken\": \"$NEW_TOKEN\"/" "$CONFIG_FILE"
-    fi
-
-    read -p "  UHF Reader IP [192.168.0.250]: " NEW_READER
-    if [ -n "$NEW_READER" ]; then
-        sed -i "s/\"Host\": \"[^\"]*\"/\"Host\": \"$NEW_READER\"/" "$CONFIG_FILE"
-    fi
-
-    ok "Configuration updated"
 fi
 
 # â”€â”€ Step 6: Disable sleep/suspend/hibernate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -277,105 +363,83 @@ xset s off -dpms 2>/dev/null || true
 
 ok "Sleep, suspend, hibernate disabled (logind changes apply after reboot)"
 
-# â”€â”€ Step 7: Configure Wi-Fi Access Point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â”€â”€ Step 7: Static IP on the router LAN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Topology: a dedicated router is the access point. This NUC and its UHF reader
+# are both wired to that router on one subnet, each with a static IP. The Field
+# tablet joins the router's Wi-Fi and reaches this NUC at $STATIC_IP. The NUC is
+# NOT an access point (any legacy hostapd/dnsmasq AP config is removed below).
 echo ""
-info "[7/11] Configuring Wi-Fi access point..."
+info "[7/11] Configuring static IP on the router LAN..."
 
-# Detect wireless interface
-WIFI_IFACE=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}' | head -1)
+# Remove legacy AP config from older installs (NUC is no longer an access point).
+rm -f /etc/network/interfaces.d/aptm-wifi /etc/dnsmasq.d/aptm-gate.conf /etc/hostapd/hostapd.conf 2>/dev/null || true
+systemctl disable --now hostapd dnsmasq 2>/dev/null || true
 
-if [ -z "$WIFI_IFACE" ]; then
-    warn "No wireless interface detected --skipping Wi-Fi AP setup"
-    warn "Connect Field/HHT devices via ethernet or configure Wi-Fi AP manually"
-else
-    info "Wireless interface: $WIFI_IFACE"
+# Setting the static IP is OPTIONAL here. If the NUC has a screen, the easy path is to
+# set it on the desktop: Settings > Network > Wired (gear) > IPv4 > Manual (persists, and
+# you can visually pick the right NIC on dual-LAN boxes). Use this script only if you'd
+# rather not touch the GUI (e.g. a headless gate over SSH).
+echo "  A static IP lets the tablet reach this NUC reliably."
+echo "  Easiest (NUC with a screen): set it later via Settings > Network > Wired > IPv4 > Manual."
+read -p "  Configure the static IP now via this script instead? [y/N]: " DO_STATIC
 
-    # SSID = gate device code (so Field app can auto-detect)
-    WIFI_SSID="${GATE_DEVICE_CODE:-aptm-gate}"
+if [[ "$DO_STATIC" =~ ^[Yy]$ ]]; then
+    # Detect the wired interface (prefer en*/eth*; fall back to the default-route dev).
+    ETH_IFACE=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(en|eth)' | head -1)
+    [ -z "$ETH_IFACE" ] && ETH_IFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
 
-    read -p "  Wi-Fi SSID [$WIFI_SSID]: " NEW_SSID
-    [ -n "$NEW_SSID" ] && WIFI_SSID="$NEW_SSID"
+    echo "  Detected wired interface: ${ETH_IFACE:-none}"
+    read -p "  Wired interface to use [$ETH_IFACE]: " V; [ -n "$V" ] && ETH_IFACE="$V"
 
-    read -p "  Wi-Fi Password [$WIFI_PASS]: " NEW_WIFI_PASS
-    [ -n "$NEW_WIFI_PASS" ] && WIFI_PASS="$NEW_WIFI_PASS"
+    read -p "  NUC static IP [192.168.1.11]: " STATIC_IP;  STATIC_IP="${STATIC_IP:-192.168.1.11}"
+    read -p "  Router / gateway IP [192.168.1.1]: " GATEWAY_IP; GATEWAY_IP="${GATEWAY_IP:-192.168.1.1}"
+    read -p "  Subnet prefix [24]: " PREFIX; PREFIX="${PREFIX:-24}"
+    read -p "  DNS server [$GATEWAY_IP]: " DNS_IP; DNS_IP="${DNS_IP:-$GATEWAY_IP}"
 
-    # Install hostapd and dnsmasq
-    if ! command -v hostapd &>/dev/null || ! command -v dnsmasq &>/dev/null; then
-        OFFLINE_HOSTAPD=$(find "$SCRIPT_DIR/prerequisites" -name "hostapd*.deb" 2>/dev/null | head -1)
-        if [ -n "$OFFLINE_HOSTAPD" ]; then
-            dpkg -i "$SCRIPT_DIR/prerequisites"/hostapd*.deb "$SCRIPT_DIR/prerequisites"/dnsmasq*.deb 2>/dev/null || true
-            apt-get -f install -y -qq 2>/dev/null || true
+    if [ -z "$ETH_IFACE" ]; then
+        warn "No wired interface detected --set the static IP manually after install."
+    elif command -v nmcli &>/dev/null && systemctl is-active --quiet NetworkManager; then
+        # Desktop NUCs (Start/Finish with a screen) are managed by NetworkManager.
+        CON_NAME="aptm-gate-lan"
+        nmcli con delete "$CON_NAME" 2>/dev/null || true
+        if nmcli con add type ethernet con-name "$CON_NAME" ifname "$ETH_IFACE" \
+            ipv4.method manual ipv4.addresses "$STATIC_IP/$PREFIX" \
+            ipv4.gateway "$GATEWAY_IP" ipv4.dns "$DNS_IP" connection.autoconnect yes 2>/dev/null; then
+            nmcli con up "$CON_NAME" 2>/dev/null || true
+            ok "Static IP via NetworkManager: $STATIC_IP/$PREFIX (gw $GATEWAY_IP) on $ETH_IFACE"
         else
-            apt-get update -qq
-            apt-get install -y -qq hostapd dnsmasq
+            warn "nmcli failed --set the static IP manually (nmcli or /etc/netplan)."
         fi
-    fi
-    ok "hostapd and dnsmasq installed"
-
-    # Stop NetworkManager from managing the Wi-Fi interface
-    if command -v nmcli &>/dev/null; then
-        nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
-    fi
-
-    # Assign static IP to wireless interface
-    cat > /etc/network/interfaces.d/aptm-wifi << EOF
-auto $WIFI_IFACE
-iface $WIFI_IFACE inet static
-    address 192.168.1.1
-    netmask 255.255.255.0
-EOF
-
-    # Configure hostapd
-    cat > /etc/hostapd/hostapd.conf << EOF
-interface=$WIFI_IFACE
-driver=nl80211
-ssid=$WIFI_SSID
-hw_mode=g
-channel=$WIFI_CHANNEL
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase=$WIFI_PASS
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
-EOF
-
-    # Tell hostapd to use our config
-    if [ -f /etc/default/hostapd ]; then
-        sed -i 's|^#*DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-    fi
-
-    # Configure dnsmasq for DHCP
-    cat > /etc/dnsmasq.d/aptm-gate.conf << EOF
-interface=$WIFI_IFACE
-dhcp-range=192.168.1.10,192.168.1.50,255.255.255.0,24h
-bind-interfaces
-server=8.8.8.8
-domain-needed
-bogus-priv
-EOF
-
-    # Bring up the interface
-    ip addr flush dev "$WIFI_IFACE" 2>/dev/null || true
-    ip addr add 192.168.1.1/24 dev "$WIFI_IFACE" 2>/dev/null || true
-    ip link set "$WIFI_IFACE" up 2>/dev/null || true
-
-    # Enable and start services
-    systemctl unmask hostapd 2>/dev/null || true
-    systemctl enable hostapd dnsmasq 2>/dev/null
-    systemctl restart dnsmasq 2>/dev/null || true
-    systemctl restart hostapd 2>/dev/null || true
-
-    if systemctl is-active --quiet hostapd; then
-        ok "Wi-Fi AP active --SSID: $WIFI_SSID, IP: 192.168.1.1"
     else
-        warn "hostapd failed to start. Check: journalctl -u hostapd -e"
-        warn "You may need to disable Wi-Fi power management: iwconfig $WIFI_IFACE power off"
+        # Headless/server NUCs use netplan + systemd-networkd.
+        NETPLAN_FILE="/etc/netplan/99-aptm-gate.yaml"
+        cat > "$NETPLAN_FILE" << EOF
+network:
+  version: 2
+  ethernets:
+    $ETH_IFACE:
+      dhcp4: false
+      addresses: [$STATIC_IP/$PREFIX]
+      routes:
+        - to: default
+          via: $GATEWAY_IP
+      nameservers:
+        addresses: [$DNS_IP]
+EOF
+        chmod 600 "$NETPLAN_FILE"
+        netplan apply 2>/dev/null || warn "netplan apply failed --check $NETPLAN_FILE"
+        ok "Static IP via netplan: $STATIC_IP/$PREFIX (gw $GATEWAY_IP) on $ETH_IFACE"
     fi
+else
+    ok "Skipping static-IP config. Set it on the NUC: Settings > Network > Wired > IPv4 > Manual"
+    info "  (or netplan/nmcli over SSH for a headless gate). The tablet must reach this NUC's IP."
 fi
+
+# Best-effort current IP for the summary URLs below (whether or not we set it here).
+DISPLAY_IP="${STATIC_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+[ -z "$DISPLAY_IP" ] && DISPLAY_IP="localhost"
+
+info "  Reader expected at $READER_HOST:$READER_PORT on this same LAN."
 
 # â”€â”€ Step 8: Create systemd service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo ""
@@ -384,8 +448,8 @@ info "[8/11] Creating systemd service..."
 cat > "/etc/systemd/system/$SERVICE_NAME.service" << EOF
 [Unit]
 Description=APTM Gate Service
-After=network.target postgresql.service hostapd.service
-Wants=postgresql.service
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
 
 [Service]
 Type=simple
@@ -431,17 +495,17 @@ fi
 echo ""
 info "[10/11] Display browser setup..."
 
+# Display is derived from the role chosen in Step 5: Start/Finish get a kiosk,
+# Checkpoint is headless.
 DISPLAY_ENABLED="n"
-read -p "  Is this a Start or Finish gate with a screen? [y/N]: " DISPLAY_ENABLED
+DISPLAY_PAGE=""
+case "$ROLE" in
+    Start)  DISPLAY_PAGE="start-display.html" ;;
+    Finish) DISPLAY_PAGE="finish-display.html" ;;
+esac
 
-if [[ "$DISPLAY_ENABLED" =~ ^[Yy]$ ]]; then
-    # Determine display page based on gate type
-    DISPLAY_PAGE="start-display.html"
-    read -p "  Gate type --(s)tart or (f)inish? [s/f]: " GATE_TYPE_CHOICE
-    if [[ "$GATE_TYPE_CHOICE" =~ ^[Ff]$ ]]; then
-        DISPLAY_PAGE="finish-display.html"
-    fi
-
+if [ -n "$DISPLAY_PAGE" ]; then
+    DISPLAY_ENABLED="y"
     DISPLAY_URL="http://localhost:$KESTREL_PORT/$DISPLAY_PAGE"
 
     # Install a browser if not present
@@ -594,19 +658,26 @@ echo -e "${GREEN}=======================================${NC}"
 echo ""
 echo -e "  Service    : $SERVICE_NAME"
 echo -e "  Status     : $(echo "$HEALTH" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)"
-echo -e "  API        : http://192.168.1.1:$KESTREL_PORT"
-echo -e "  Swagger    : http://192.168.1.1:$KESTREL_PORT/swagger"
-echo -e "  Health     : http://192.168.1.1:$KESTREL_PORT/gate/health"
-echo -e "  Display    : http://192.168.1.1:$KESTREL_PORT/start-display.html"
+echo -e "  Role       : $ROLE${CHECKPOINT_SEQUENCE:+ (seq $CHECKPOINT_SEQUENCE)}${GATE_NAME:+ -- $GATE_NAME}"
+echo -e "  API        : http://$DISPLAY_IP:$KESTREL_PORT"
+echo -e "  Swagger    : http://$DISPLAY_IP:$KESTREL_PORT/swagger"
+echo -e "  Health     : http://$DISPLAY_IP:$KESTREL_PORT/gate/health"
+if [ -n "$DISPLAY_PAGE" ]; then
+echo -e "  Display    : http://$DISPLAY_IP:$KESTREL_PORT/$DISPLAY_PAGE"
+fi
 echo -e "  Install Dir: $INSTALL_DIR"
 echo -e "  Database   : $DB_NAME (PostgreSQL)"
-echo -e "  Wi-Fi AP   : ${WIFI_SSID:-N/A} (192.168.1.1)"
+if [ -n "$STATIC_IP" ]; then
+echo -e "  Network    : $STATIC_IP/$PREFIX on ${ETH_IFACE:-?} (gw $GATEWAY_IP)"
+else
+echo -e "  Network    : set on the NUC (Settings > Network > Wired > IPv4); current: $DISPLAY_IP"
+fi
+echo -e "  Reader     : $READER_HOST:$READER_PORT"
 echo -e "  Logs       : journalctl -u $SERVICE_NAME -f"
 echo ""
 echo -e "  ${YELLOW}System hardening:${NC}"
 echo -e "    Sleep/suspend/hibernate: ${GREEN}DISABLED${NC}"
-echo -e "    Watchdog timeout       : 90s (systemd auto-restart)"
-echo -e "    Health check cron      : every 2 min"
+echo -e "    Health check cron      : disabled (enable after verifying)"
 if [[ "$DISPLAY_ENABLED" =~ ^[Yy]$ ]]; then
 echo -e "    Browser kiosk          : $DISPLAY_PAGE (auto-open on boot)"
 else

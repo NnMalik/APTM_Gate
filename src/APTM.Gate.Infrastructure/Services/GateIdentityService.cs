@@ -44,11 +44,29 @@ public sealed class GateIdentityService : IGateIdentityService
 
         var existing = await _db.GateIdentities.FirstOrDefaultAsync(ct);
 
-        // Idempotent same-payload write
+        // Normalize the name: blank → null so empty strings don't masquerade as a value.
+        var name = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim();
+
+        // Fully idempotent — nothing changed at all.
+        if (existing is not null
+            && existing.Role == request.Role
+            && existing.CheckpointSequence == request.CheckpointSequence
+            && existing.Name == name)
+        {
+            return SetIdentityResult.Ok(ToInfo(existing), restartRequired: false);
+        }
+
+        // Same role + sequence, only the name differs — a pure rename. No restart, no purge,
+        // no conflict: renaming a gate is always safe and never requires force.
         if (existing is not null
             && existing.Role == request.Role
             && existing.CheckpointSequence == request.CheckpointSequence)
         {
+            existing.Name = name;
+            existing.SetAt = DateTimeOffset.UtcNow;
+            existing.SetBy = setBy;
+            await _db.SaveChangesAsync(ct);
+            _identityProvider.Invalidate();
             return SetIdentityResult.Ok(ToInfo(existing), restartRequired: false);
         }
 
@@ -83,6 +101,7 @@ public sealed class GateIdentityService : IGateIdentityService
                     Id = 1,
                     Role = request.Role,
                     CheckpointSequence = request.CheckpointSequence,
+                    Name = name,
                     DeviceCode = _deviceCode,
                     SetAt = DateTimeOffset.UtcNow,
                     SetBy = setBy
@@ -92,6 +111,7 @@ public sealed class GateIdentityService : IGateIdentityService
             {
                 existing.Role = request.Role;
                 existing.CheckpointSequence = request.CheckpointSequence;
+                existing.Name = name;
                 existing.DeviceCode = _deviceCode;
                 existing.SetAt = DateTimeOffset.UtcNow;
                 existing.SetBy = setBy;
@@ -139,6 +159,7 @@ public sealed class GateIdentityService : IGateIdentityService
     {
         Role = row.Role,
         CheckpointSequence = row.CheckpointSequence,
+        Name = row.Name,
         DeviceCode = row.DeviceCode,
         SetAt = row.SetAt,
         SetBy = row.SetBy

@@ -26,6 +26,7 @@ public class GateIdentityConfiguration : IEntityTypeConfiguration<GateIdentity>
         builder.Property(x => x.Id).HasColumnName("id").ValueGeneratedNever();
         builder.Property(x => x.Role).HasColumnName("role").HasMaxLength(20).IsRequired();
         builder.Property(x => x.CheckpointSequence).HasColumnName("checkpoint_sequence");
+        builder.Property(x => x.Name).HasColumnName("name").HasMaxLength(100);
         builder.Property(x => x.DeviceCode).HasColumnName("device_code").HasMaxLength(50).IsRequired();
         builder.Property(x => x.SetAt).HasColumnName("set_at").IsRequired();
         builder.Property(x => x.SetBy).HasColumnName("set_by").HasMaxLength(256).IsRequired();

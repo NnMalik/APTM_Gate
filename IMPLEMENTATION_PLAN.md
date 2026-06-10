@@ -357,3 +357,104 @@ dotnet ef migrations add MakeProcessedEventCandidateNullable \
 ```
 
 Combined with Phase 1's `AddGateIdentity` migration, both apply at startup via `PostgresInitService.MigrateAsync`.
+
+---
+
+# Phase 3 — Checkpoint Names, Pre-flash, Confirmed Erase, Clock Sampling
+
+## Why Phase 3
+
+Operational gaps surfaced once the three gate types were deployed for real:
+
+1. Remote checkpoints had to be field-provisioned on arrival — not "power on and go".
+2. There was no operator-facing **name** for a gate; checkpoints showed only `CP{seq}`.
+3. Pull auto-cleared; there was no "review the data, then decide to keep or erase" step,
+   and no scoped erase of the reviewed processed events (only a full `TRUNCATE`).
+4. Clock drift was displayed but never **applied** to correct checkpoint read times,
+   and there was no way to sample a NUC's clock without a full data pull.
+
+## Decisions
+
+- **Checkpoint provisioning:** pre-flashed identity (appsettings) + field-app override.
+- **Erase model:** confirmed bulk erase — pull, review, then erase up to the reviewed mark.
+- **Start display:** `led-start-display.html` already correct (reader-independent, HHT-driven).
+- **Name source:** pre-flash (appsettings) + field app PUT (NOT config-push from Main).
+- **Clock:** add `GET /gate/time`; apply per-gate drift to correct read times on the field.
+
+## Gate Service Changes
+
+### Identity name (migration `AddGateIdentityName`)
+- `GateIdentity.Name` (nullable, `name varchar(100)`), surfaced in `GateIdentityInfo`,
+  `GET`/`PUT /gate/identity`. `GateIdentityService.SetAsync` treats a name-only change as a
+  pure rename — no restart, no purge, no 409.
+
+### Pre-flash seeding
+- `PostgresInitService` seeds `gate_identity` from `Gate:Identity:{Role,CheckpointSequence,Name}`
+  after migrations, only when no identity exists yet (never clobbers a field-set identity).
+- `appsettings.json` documents the `Gate:Identity` section (blank `Role` = no seed).
+
+### Scoped checkpoint erase — `POST /gate/checkpoint/clear`
+- Body `{ upToEventId, force }`. Deletes `processed_events WHERE event_type='checkpoint'
+  AND id <= upToEventId`. Reads newer than the reviewed mark survive. 409 if `upToEventId`
+  exceeds the last pulled event (unless `force`). `ERASE:` audit marker in `sync_logs`.
+  No `RESTART IDENTITY`, so future pulls continue from the stored high-water mark.
+
+### Clock sampling — `GET /gate/time` (no auth)
+- Returns `{ serverTimeUtc, serverTimeUnixMs, deviceCode }` for drift/round-trip measurement.
+
+## Field App Changes
+
+- DTOs: `GateIdentityDto.name`, `SetGateIdentityRequest.name`, `GateTimeDto`,
+  `ClearCheckpointRequest/Response`. `GateApi.getTime()`, `GateApi.clearCheckpoint()`.
+- Repository: `getTime`, `clearCheckpoint`; `setIdentity` carries `name`.
+- Use cases: `PushGateIdentityUseCase` carries `name`; new `EraseCheckpointFromGateUseCase`
+  (clearCheckpoint up to pulled HWM → clearRaw of processed rows; tablet keeps its copy).
+- Provisioning screen (`GateRoleScreen`/VM): name input + current-name display.
+- Test Operations (`TestOperationsScreen`/VM):
+  - `CheckpointReadItem.readTimeCorrectedMillis` (= readTime − drift); display + merged-sort
+    use corrected time.
+  - "Erase Gate Data (after review)" button + confirm dialog for connected checkpoints.
+  - Date-wise grouping of reads under date subheaders in each checkpoint card.
+
+---
+
+# Phase 4 — One-Tap Checkpoint Wi-Fi Connect (Field App only)
+
+## Why Phase 4
+
+New checkpoint topology: each of the 4 checkpoints = 1 router + 1 NUC (static IP behind the
+router) + 4-port reader. The operator roams between them and needs to connect quickly. The
+config already carried `wifiSSID/wifiPassword/nucIpAddress` but nobody used them, and the
+field app never joined Wi-Fi programmatically (manual Settings + typed IP).
+
+## Decisions
+- **Connect UX:** one-tap via `WifiNetworkSpecifier` (Android 10+; one OS approval dialog per
+  connect — silent auto-join is not allowed by Android).
+- **Credential source:** manual entry on the tablet (no Main dependency). The config
+  `gateWifiCredentials` plumbing was intentionally NOT wired.
+- **Gate service:** no change. NUC static IP is OS-level (imaging/netplan, behind the router) —
+  the old `hostapd` AP mode in `setup.sh` is replaced by static-IP client config at imaging.
+
+## Field App Changes (Android)
+- `GateConnection` model (role + checkpointSequence + ssid + password + static IP + port) +
+  `GateConnectionRepository` (encrypted JSON list in EncryptedSharedPreferences — profiles
+  carry router passwords). Covers all gate types, not just checkpoints.
+- `WifiConnector` (`network/`): `WifiNetworkSpecifier` + `ConnectivityManager.requestNetwork`
+  + `bindProcessToNetwork` so gate API traffic routes to the NUC behind the router;
+  `disconnect()` releases the binding. API < 29 → unsupported, fall back to manual connect.
+  **Shared-network fast path:** tracks the bound SSID — switching to a sibling gate on the
+  same router (e.g. Start ↔ Finish) skips the Wi-Fi join and its OS dialog (IP change only).
+- Gate cards embedded directly on `GateManageScreen` (one card per saved gate, all 6):
+  role badge, SSID + static IP, Connect / Edit / Delete, plus Add Gate form (role chips,
+  optional checkpoint sequence, SSID, password, static IP, port). Connect → Wi-Fi join →
+  health/token handshake to the static IP → persists gate IP/port/deviceCode so the rest of
+  the app targets that NUC. Logic lives in `GateManageViewModel`.
+- Manifest: added `CHANGE_NETWORK_STATE`.
+
+## Topology (6 gates)
+1 Start + 1 Finish + 4 Checkpoints. Gates may share a router/SSID with distinct static IPs
+(added once — they rarely change). Manual one-time entry on the tablet; no Main dependency.
+
+## Caveat
+Each *new-network* connect shows one Android approval dialog (OS requirement). Switching
+between gates already on the bound network is dialog-free.

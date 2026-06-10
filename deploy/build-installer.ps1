@@ -103,6 +103,15 @@ Copy-Item (Join-Path $scriptDir "installer-template\setup.sh") (Join-Path $outDi
 Copy-Item (Join-Path $scriptDir "installer-template\healthcheck.sh") (Join-Path $outDir "healthcheck.sh") -Force
 Copy-Item (Join-Path $scriptDir "installer-template\README.txt") (Join-Path $outDir "README.txt") -Force -ErrorAction SilentlyContinue
 
+# Carry the offline-prerequisites scaffold (folder layout + READMEs). Does not clobber
+# any .deb / .tar.gz the operator has already dropped in (only same-named files).
+$prereqSrc = Join-Path $scriptDir "installer-template\prerequisites"
+$prereqDst = Join-Path $outDir "prerequisites"
+if (Test-Path $prereqSrc) {
+    New-Item -ItemType Directory -Path (Join-Path $prereqDst "postgresql") -Force | Out-Null
+    Copy-Item (Join-Path $prereqSrc "*") $prereqDst -Recurse -Force
+}
+
 # Ensure shell scripts have unix line endings (LF, not CRLF)
 foreach ($shFile in @("setup.sh", "healthcheck.sh")) {
     $shPath = Join-Path $outDir $shFile
@@ -131,8 +140,11 @@ Write-Host @"
 Next steps:
   1. Copy APTM-Gate-Installer/ (or .zip) to USB drive
   2. For offline install, also copy to prerequisites/:
-     - dotnet-runtime-10.0.*-linux-x64.tar.gz (from https://dotnet.microsoft.com/download)
-     - postgresql-16 .deb packages (from apt cache or download)
+     - aspnetcore-runtime-10.0.*-linux-x64.tar.gz  -> prerequisites/
+       (from https://dotnet.microsoft.com/download/dotnet/10.0)
+     - PostgreSQL 16 + ALL deps as .deb            -> prerequisites/postgresql/
+       (use the Docker one-liner in prerequisites/postgresql/README.txt --
+        plain 'apt-get download postgresql' omits dependencies and will fail offline)
   3. On the NUC: sudo bash setup.sh
   4. Edit /opt/aptm-gate/appsettings.Production.json if needed (Reader IP, DeviceCode, etc.)
   5. Verify: curl http://localhost:$KestrelPort/gate/health

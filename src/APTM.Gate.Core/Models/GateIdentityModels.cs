@@ -5,6 +5,10 @@ public sealed class GateIdentityInfo
 {
     public string Role { get; init; } = default!;
     public int? CheckpointSequence { get; init; }
+
+    /// <summary>Operator-facing name/label for this gate. Null if never set.</summary>
+    public string? Name { get; init; }
+
     public string DeviceCode { get; init; } = default!;
     public DateTimeOffset SetAt { get; init; }
     public string SetBy { get; init; } = default!;
@@ -15,6 +19,9 @@ public sealed class SetGateIdentityRequest
 {
     public string Role { get; init; } = default!;
     public int? CheckpointSequence { get; init; }
+
+    /// <summary>Optional operator-facing name/label. Can be updated without a restart.</summary>
+    public string? Name { get; init; }
 }
 
 /// <summary>Result of <c>IGateIdentityService.SetAsync</c>.</summary>

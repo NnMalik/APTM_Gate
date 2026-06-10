@@ -22,7 +22,27 @@
       "PowerShell(& \"deploy\\\\windows\\\\build-windows-installer.ps1\")",
       "Bash(stat -c '%y  %n' deploy/APTM-Gate-Installer.zip deploy/APTM-Gate-Installer/backend/APTM.Gate.Infrastructure.dll 2>/dev/null && echo '---contents---' && ls deploy/APTM-Gate-Installer/ && echo '---backend dlls---' && ls deploy/APTM-Gate-Installer/backend/ | head -20)",
       "Read(//c/Users/DeLL/source/repos/APTM_GATE/**)",
-      "PowerShell(& \"deploy\\\\build-installer.ps1\")"
+      "PowerShell(& \"deploy\\\\build-installer.ps1\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\" -Recurse -Directory -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(./gradlew compileDebugKotlin -q)",
+      "Read(//c/c/Users/DeLL/source/repos/APTM_FIELD/app/src/main/java/com/aptm/field/data/repository/**)",
+      "Read(//c/c/Users/DeLL/source/repos/APTM_FIELD/app/src/main/java/com/aptm/field/network/**)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\" -Force)",
+      "Bash(Select-Object -Property Name, FullName)",
+      "Bash(bash -n setup.sh)",
+      "Bash(cp installer-template/setup.sh APTM-Gate-Installer/setup.sh)",
+      "Bash(bash -n APTM-Gate-Installer/setup.sh)",
+      "Bash(bash -n installer-template/setup.sh)",
+      "Bash(cd /c/Users/DeLL/source/repos/APTM_GATE/deploy && find . -path ./windows -prune -o -name \"*.txt\" -print 2>/dev/null | grep -i prereq; echo \"---\"; ls -R installer-template/prerequisites 2>/dev/null; ls -R APTM-Gate-Installer/prerequisites 2>/dev/null)",
+      "Bash(cd /c/Users/DeLL/source/repos/APTM_GATE/deploy && cp installer-template/prerequisites/postgresql/README.txt APTM-Gate-Installer/prerequisites/postgresql/README.txt && echo \"synced\")",
+      "Read(//c/c/Users/DeLL/source/repos/APTM_FIELD/app/src/main/java/com/aptm/field/domain/usecase/**)",
+      "Read(//c/Users/DeLL/OneDrive/Desktop/sdk uhf/sdkzkrfid407/english/**)",
+      "Bash(antiword \"Manual/UHF RFID Reader Series User Manual V2.20.doc\")",
+      "Bash(antiword \"SDK/Java-tcp/CReader.jar Manual.doc\")",
+      "Bash(antiword \"SDK/C#/UHFReader288.DLL manual V2.1.doc\")",
+      "Read(//tmp/**)",
+      "Bash(awk '/[Hh]eartbeat/{print NR\": \"$0}' usermanual.txt)"
     ]
   }
 }
