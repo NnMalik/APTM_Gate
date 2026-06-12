@@ -28,6 +28,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
             Reader = new ReaderDiagnostics
             {
                 Connected = _readerStatus.IsConnected,
+                ModeVerified = _readerStatus.ModeVerified,
                 Model = _readerStatus.ReaderModel,
                 FirmwareVersion = _readerStatus.FirmwareVersion,
                 LastSeenAt = _readerStatus.LastReadAt
@@ -37,7 +38,8 @@ public sealed class DiagnosticsService : IDiagnosticsService
                 PendingCount = pendingCount,
                 ProcessedCount = processedCount,
                 UnresolvedCount = unresolvedCount,
-                DuplicateCount = duplicateCount
+                DuplicateCount = duplicateCount,
+                IngestQueueDepth = _readerStatus.IngestQueueDepth
             },
             Database = new DatabaseDiagnostics()
         };

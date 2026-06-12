@@ -19,11 +19,13 @@ public static class ReaderEndpoints
             return Results.Ok(new
             {
                 reader.IsConnected,
+                reader.ModeVerified,
                 reader.ReaderId,
                 reader.ReaderModel,
                 reader.FirmwareVersion,
                 reader.AntennaCount,
-                LastReadAt = reader.LastReadAt?.ToString("o")
+                LastReadAt = reader.LastReadAt?.ToString("o"),
+                LastFrameAt = reader.LastFrameAt?.ToString("o")
             });
         })
         .WithName("ReaderStatus")

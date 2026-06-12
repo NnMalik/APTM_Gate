@@ -4,6 +4,7 @@ using APTM.Gate.Core.Models;
 using APTM.Gate.Infrastructure.Entities;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace APTM.Gate.Infrastructure.Services;
 
@@ -11,11 +12,19 @@ public sealed class SyncHubService : ISyncHubService
 {
     private readonly GateDbContext _db;
     private readonly IGateIdentityProvider _identityProvider;
+    private readonly IReaderStatusProvider _readerStatus;
+    private readonly ILogger<SyncHubService> _logger;
 
-    public SyncHubService(GateDbContext db, IGateIdentityProvider identityProvider)
+    public SyncHubService(
+        GateDbContext db,
+        IGateIdentityProvider identityProvider,
+        IReaderStatusProvider readerStatus,
+        ILogger<SyncHubService> logger)
     {
         _db = db;
         _identityProvider = identityProvider;
+        _readerStatus = readerStatus;
+        _logger = logger;
     }
 
     public async Task<SyncPushResult> PushAsync(SyncPushPayload payload, CancellationToken ct = default)
@@ -219,17 +228,45 @@ public sealed class SyncHubService : ISyncHubService
                 {
                     var now = DateTimeOffset.UtcNow;
 
-                    // Compute HHT-to-Gate clock offset directly at receipt:
-                    //   offset = gateReceiveTime - hhtGunTime ≈ clockDrift + networkLatency
-                    //   Network latency on local Wi-Fi is ~10-50ms (negligible).
-                    // This converts the gun start from HHT's clock to Gate's clock so
-                    // elapsed = tagReadTime(Gate) - adjustedGunStart(Gate) is correct.
-                    var hhtToGateOffsetMs = (long)(now - racePayload.GunStartTime).TotalMilliseconds;
-                    var adjustedGunStart = racePayload.GunStartTime.AddMilliseconds(hhtToGateOffsetMs);
+                    // Convert the gun start from the HHT's clock to this gate's clock.
+                    //
+                    // Preferred: the HHT measured its offset to THIS gate (NTP-style via
+                    // GET /gate/time) shortly before pushing and sent it along. Then
+                    //   adjustedGunStart = hhtGunTime + measuredOffset
+                    // is exact regardless of how late the push arrives — queue polling,
+                    // retries, or minutes of Wi-Fi outage no longer shorten elapsed times.
+                    //
+                    // Fallback (older HHTs, no offset in payload): assume the push arrived
+                    // instantly — offset = gateReceiveTime − hhtGunTime. Any delivery delay
+                    // makes the whole heat appear faster by exactly that delay.
+                    long appliedOffsetMs;
+                    string offsetMethod;
+                    if (payload.GateClockOffsetMs is long measuredOffsetMs)
+                    {
+                        appliedOffsetMs = measuredOffsetMs;
+                        offsetMethod = "measured";
+                    }
+                    else
+                    {
+                        appliedOffsetMs = (long)(now - racePayload.GunStartTime).TotalMilliseconds;
+                        offsetMethod = "receipt";
+                    }
 
-                    // Safety: if adjusted somehow lands in the future, clamp to now
-                    if (adjustedGunStart > now)
+                    var adjustedGunStart = racePayload.GunStartTime.AddMilliseconds(appliedOffsetMs);
+
+                    // Safety: a gun start can't be in the future. Allow a small margin for
+                    // the offset sample's own uncertainty before clamping — and log, because
+                    // a clamp on a "measured" offset means the sample was bad.
+                    var rttMarginMs = Math.Max(payload.GateClockOffsetRttMs ?? 0, 250);
+                    if (adjustedGunStart > now.AddMilliseconds(rttMarginMs))
+                    {
+                        _logger.LogWarning(
+                            "Adjusted gun start for heat {HeatId} lands {Ms}ms in the future (method: {Method}) — clamping to now",
+                            racePayload.HeatId,
+                            (long)(adjustedGunStart - now).TotalMilliseconds,
+                            offsetMethod);
                         adjustedGunStart = now;
+                    }
 
                     // Event scope: prefer the eventId the HHT put in the payload; fall
                     // back to the gate's own active event when an older HHT omits it.
@@ -251,6 +288,8 @@ public sealed class SyncHubService : ISyncHubService
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
                         SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
+                        AppliedOffsetMs = appliedOffsetMs,
+                        OffsetMethod = offsetMethod,
                         ReceivedAt = now,
                         GroupId = racePayload.GroupId,
                         EventId = (int?)racePayload.EventId ?? raceGateConfig?.ActiveEventId,
@@ -359,13 +398,20 @@ public sealed class SyncHubService : ISyncHubService
 
         var highWaterMark = events.Count > 0 ? events.Max(e => e.Id) : sinceEventId;
 
-        // Log the pull
+        // Current max id on the gate — lets the puller detect a wiped gate (its cached
+        // mark exceeding this value) and reset. 0 when the table is empty.
+        var maxEventId = await _db.ProcessedEvents.MaxAsync(pe => (long?)pe.Id, ct) ?? 0L;
+
+        // Log the pull. Cap the logged mark at the gate's actual max id: after a wipe,
+        // a stale client pulls with a mark from before the reset — logging that value
+        // verbatim would make race-data/status report "all pulled" for events the
+        // device never saw.
         _db.SyncLogs.Add(new SyncLogEntry
         {
             Id = Guid.NewGuid(),
             PullerDeviceId = pullerDeviceId,
             PullerDeviceCode = pullerDeviceCode,
-            LastProcessedEventId = highWaterMark,
+            LastProcessedEventId = Math.Min(highWaterMark, maxEventId),
             LastReceivedSyncId = syncData.Count > 0 ? syncData.Last().Id : null,
             PulledAt = DateTimeOffset.UtcNow
         });
@@ -378,6 +424,7 @@ public sealed class SyncHubService : ISyncHubService
             RaceStartTimes = raceStarts,
             HeatCompletions = heatCompletions,
             HighWaterMark = highWaterMark,
+            MaxEventId = maxEventId,
             SyncDataHighWaterMs = syncData.Count > 0
                 ? syncData.Max(s => s.ReceivedAt).ToUnixTimeMilliseconds()
                 : sinceSyncMs,
@@ -400,6 +447,16 @@ public sealed class SyncHubService : ISyncHubService
             .OrderByDescending(pe => pe.ProcessedAt)
             .Select(pe => (DateTimeOffset?)pe.ProcessedAt)
             .FirstOrDefaultAsync(ct);
+
+        // "Anything left on this gate?" numbers — what the operator checks before
+        // erase/power-off. WIPE:/ERASE: audit markers are excluded so a previous
+        // teardown can't masquerade as a real device having pulled.
+        var maxEventId = await _db.ProcessedEvents.MaxAsync(pe => (long?)pe.Id, ct) ?? 0L;
+        var maxPulledEventId = await _db.SyncLogs
+            .Where(s => !s.PullerDeviceCode.StartsWith("WIPE:") && !s.PullerDeviceCode.StartsWith("ERASE:"))
+            .Select(s => (long?)s.LastProcessedEventId)
+            .MaxAsync(ct) ?? 0L;
+        var pendingRawCount = await _db.RawTagBuffers.CountAsync(r => r.Status == "PENDING", ct);
 
         var syncPulls = await _db.SyncLogs
             .GroupBy(s => s.PullerDeviceCode)
@@ -431,7 +488,11 @@ public sealed class SyncHubService : ISyncHubService
             ReceivedSyncDataCount = syncDataCount,
             RaceStartTimesCount = raceStartCount,
             LastEventAt = lastEvent,
-            SyncPulls = syncPulls
+            SyncPulls = syncPulls,
+            MaxEventId = maxEventId,
+            UnpulledEventCount = Math.Max(0, maxEventId - maxPulledEventId),
+            PendingRawCount = pendingRawCount,
+            IngestQueueDepth = _readerStatus.IngestQueueDepth
         };
     }
 }

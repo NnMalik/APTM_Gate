@@ -23,8 +23,21 @@ public static class BufferEndpoints
 
         group.MapPost("/process-now", async (
             IBufferProcessingService processor,
+            IReaderStatusProvider readerStatus,
             CancellationToken ct) =>
         {
+            // Reads can sit in the worker's in-memory ingest queue for a moment before
+            // they reach raw_tag_buffer (longer if the DB is retrying). Wait briefly for
+            // it to drain so a flush-then-pull can't miss reads that are already parsed
+            // but not yet persisted.
+            const int drainWaitMs = 3000;
+            var drainSw = Stopwatch.StartNew();
+            while (readerStatus.IngestQueueDepth > 0 && drainSw.ElapsedMilliseconds < drainWaitMs)
+            {
+                if (ct.IsCancellationRequested) break;
+                await Task.Delay(100, ct);
+            }
+
             // Drain the buffer: keep calling ProcessBatchAsync(100) until it returns 0.
             // Safety cap so a runaway buffer can't tie up the request indefinitely.
             const int maxBatches = 1000;
@@ -45,7 +58,10 @@ public static class BufferEndpoints
             {
                 processedRows = totalProcessed,
                 durationMs = sw.ElapsedMilliseconds,
-                hitBatchCap = totalProcessed >= maxBatches * batchSize
+                hitBatchCap = totalProcessed >= maxBatches * batchSize,
+                // Non-zero = reads still stuck in memory (DB retrying) — the caller's
+                // subsequent pull may be missing them; retry the flush.
+                ingestQueueDepth = readerStatus.IngestQueueDepth
             });
         })
         .WithName("ProcessBufferNow")

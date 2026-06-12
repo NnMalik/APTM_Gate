@@ -42,7 +42,12 @@
       "Bash(antiword \"SDK/Java-tcp/CReader.jar Manual.doc\")",
       "Bash(antiword \"SDK/C#/UHFReader288.DLL manual V2.1.doc\")",
       "Read(//tmp/**)",
-      "Bash(awk '/[Hh]eartbeat/{print NR\": \"$0}' usermanual.txt)"
+      "Bash(awk '/[Hh]eartbeat/{print NR\": \"$0}' usermanual.txt)",
+      "Bash(sed -n '70,130p' RWDev.cs)",
+      "Bash(sed -n '1,80p' DevControl.cs)",
+      "PowerShell($p = \"C:\\\\Users\\\\DeLL\\\\OneDrive\\\\Desktop\\\\sdk uhf\\\\sdkzkrfid407\\\\english\\\\Demo\\\\c#\\\\UHFReader288 Demo Software User's Guide V5.0.doc\"; $bytes = [System.IO.File]::ReadAllBytes\\($p\\); $text = [System.Text.Encoding]::Unicode.GetString\\($bytes\\); $matches2 = [regex]::Matches\\($text, \"[\\\\x20-\\\\x7E]{40,}\"\\); $lines = $matches2 | ForEach-Object { $_.Value }; \\($lines | Where-Object { $_ -match \"TCP|connect|Connect|client|Client|network|Network|server|Server\" } | Select-Object -First 60\\) -join \"`n\")",
+      "PowerShell(dotnet build \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\tools\\\\ReaderTester\\\\ReaderTester.csproj\" -v q --nologo)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_FIELD\" -Recurse -Directory)"
     ]
   }
 }

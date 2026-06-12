@@ -22,6 +22,24 @@ public sealed class SyncStatusResponse
     public int RaceStartTimesCount { get; set; }
     public DateTimeOffset? LastEventAt { get; set; }
     public List<SyncPullInfo> SyncPulls { get; set; } = [];
+
+    /// <summary>Highest processed_events.id on the gate (0 when empty).</summary>
+    public long MaxEventId { get; set; }
+
+    /// <summary>
+    /// Processed events no real device has pulled yet (WIPE:/ERASE: audit markers
+    /// excluded). The number the operator must see reach 0 before erase/power-off.
+    /// </summary>
+    public long UnpulledEventCount { get; set; }
+
+    /// <summary>Raw reads captured but not yet run through the dedup processor.</summary>
+    public int PendingRawCount { get; set; }
+
+    /// <summary>
+    /// Reads parsed off the wire but not yet inserted into raw_tag_buffer (in-memory).
+    /// Normally 0; non-zero means the DB consumer is catching up or retrying.
+    /// </summary>
+    public int IngestQueueDepth { get; set; }
 }
 
 public sealed class SyncPullInfo

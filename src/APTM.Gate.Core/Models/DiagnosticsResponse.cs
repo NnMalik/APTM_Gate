@@ -11,6 +11,7 @@ public sealed class DiagnosticsResponse
 public sealed class ReaderDiagnostics
 {
     public bool Connected { get; set; }
+    public bool ModeVerified { get; set; }
     public string? Model { get; set; }
     public string? FirmwareVersion { get; set; }
     public DateTimeOffset? LastSeenAt { get; set; }
@@ -30,6 +31,13 @@ public sealed class BufferDiagnostics
     public long ProcessedCount { get; set; }
     public long UnresolvedCount { get; set; }
     public long DuplicateCount { get; set; }
+
+    /// <summary>
+    /// Reads parsed off the wire but not yet inserted into raw_tag_buffer (in-memory
+    /// channel between the TCP read loop and the DB consumer). Normally 0–200; a
+    /// sustained high value means PostgreSQL is down/slow and inserts are retrying.
+    /// </summary>
+    public int IngestQueueDepth { get; set; }
 }
 
 public sealed class DatabaseDiagnostics

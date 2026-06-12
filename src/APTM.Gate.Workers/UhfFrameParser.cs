@@ -9,9 +9,9 @@ namespace APTM.Gate.Workers;
 /// </summary>
 public static class UhfFrameParser
 {
-    private const byte TagReportCmd = 0xEE;
-    private const byte HeartbeatStatus = 0x28;
-    private const byte SuccessStatus = 0x00;
+    public const byte TagReportCmd = 0xEE;
+    public const byte HeartbeatStatus = 0x28;
+    public const byte SuccessStatus = 0x00;
     private const ushort CrcPreset = 0xFFFF;
     private const ushort CrcPolynomial = 0x8408;
 
@@ -40,12 +40,13 @@ public static class UhfFrameParser
     }
 
     /// <summary>
-    /// Extracts complete frames from an accumulation buffer.
-    /// Returns parsed tag frames and total bytes consumed.
+    /// Extracts ALL complete, CRC-valid frames from an accumulation buffer — tag
+    /// reports, heartbeats, and command responses alike. The caller routes them by
+    /// command/status byte. Returns the raw frames and total bytes consumed.
     /// </summary>
-    public static (List<RawTagFrame> Frames, int BytesConsumed) ExtractTagFrames(ReadOnlySpan<byte> buffer)
+    public static (List<byte[]> Frames, int BytesConsumed) ExtractFrames(ReadOnlySpan<byte> buffer)
     {
-        var frames = new List<RawTagFrame>();
+        var frames = new List<byte[]>();
         int offset = 0;
 
         while (offset < buffer.Length)
@@ -72,18 +73,7 @@ public static class UhfFrameParser
                 continue;
             }
 
-            byte reCmd = frame[2];
-            byte status = frame[3];
-
-            // Only process real-time inventory tag reports (0xEE)
-            if (reCmd == TagReportCmd && status == SuccessStatus)
-            {
-                var tagFrame = ParseTagFrame(frame);
-                if (tagFrame is not null)
-                    frames.Add(tagFrame);
-            }
-            // Heartbeat (0xEE with status 0x28) — silently skip
-
+            frames.Add(frame.ToArray());
             offset += totalFrameSize;
         }
 
@@ -94,7 +84,7 @@ public static class UhfFrameParser
     /// Parses a validated 0xEE tag frame into a RawTagFrame.
     /// Frame: [Len][Adr][0xEE][0x00][AntennaId][EpcLen][EPC...][RSSI][CRC][CRC]
     /// </summary>
-    private static RawTagFrame? ParseTagFrame(ReadOnlySpan<byte> frame)
+    public static RawTagFrame? ParseTagFrame(ReadOnlySpan<byte> frame)
     {
         // Minimum: Len(1) + Adr(1) + Cmd(1) + Status(1) + Ant(1) + EpcLen(1) + EPC(1) + CRC(2) = 9
         if (frame.Length < 9) return null;

@@ -1,5 +1,7 @@
 using APTM.Gate.Api.Services;
 using APTM.Gate.Core.Interfaces;
+using APTM.Gate.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace APTM.Gate.Api.Endpoints;
 
@@ -17,12 +19,15 @@ public static class LifecycleEndpoints
             .RequireProvisioned()
             .WithTags("Lifecycle");
 
-        group.MapPost("/power-off", (
+        group.MapPost("/power-off", async (
+            bool? force,
             IGateStatusProvider statusProvider,
             IReaderStatusProvider readerStatus,
             ISystemControlService systemControl,
             IConfiguration configuration,
-            ILogger<Program> logger) =>
+            GateDbContext db,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
         {
             // Per-gate kill switch. Missing or unparseable key = allowed (default on).
             var allowed = !bool.TryParse(configuration["Gate:AllowRemotePowerOff"], out var enabled)
@@ -34,6 +39,33 @@ public static class LifecycleEndpoints
                     status = "power_off_disabled",
                     message = "Remote power-off is disabled on this gate (Gate:AllowRemotePowerOff = false)."
                 }, statusCode: 403);
+            }
+
+            // Stranded-data guard (same philosophy as checkpoint/clear and race-data/clear):
+            // refuse to power off while reads exist that no device has pulled. The data
+            // would survive in Postgres, but a powered-off NUC may not be booted again
+            // before redeployment — pull first, or pass ?force=true.
+            if (force != true)
+            {
+                var maxEventId = await db.ProcessedEvents.MaxAsync(pe => (long?)pe.Id, ct) ?? 0L;
+                var maxPulledEventId = await db.SyncLogs
+                    .Where(s => !s.PullerDeviceCode.StartsWith("WIPE:") && !s.PullerDeviceCode.StartsWith("ERASE:"))
+                    .Select(s => (long?)s.LastProcessedEventId)
+                    .MaxAsync(ct) ?? 0L;
+                var unpulledEvents = Math.Max(0, maxEventId - maxPulledEventId);
+                var pendingRaw = await db.RawTagBuffers.CountAsync(r => r.Status == "PENDING", ct);
+                var ingestQueueDepth = readerStatus.IngestQueueDepth;
+
+                if (unpulledEvents > 0 || pendingRaw > 0 || ingestQueueDepth > 0)
+                {
+                    return Results.Conflict(new
+                    {
+                        error = "Gate still holds reads no device has pulled. Pull first, or pass ?force=true to power off anyway.",
+                        unpulledEvents,
+                        pendingRaw,
+                        ingestQueueDepth
+                    });
+                }
             }
 
             // Stop claiming new buffer batches, then power off AFTER the response is
@@ -67,8 +99,9 @@ public static class LifecycleEndpoints
         .WithSummary("Power off the NUC (full OS shutdown)")
         .WithDescription(
             "Drains workers, then powers the NUC off at the OS level via the configured " +
-            "command (Gate:PowerOffCommand, default 'systemctl poweroff'). Irreversible " +
-            "remotely — the machine must be physically powered back on. Can be disabled " +
-            "per gate via Gate:AllowRemotePowerOff.");
+            "command (Gate:PowerOffCommand, default 'systemctl poweroff'). Returns 409 if " +
+            "unpulled reads remain (processed, pending raw, or in-memory) unless ?force=true. " +
+            "Irreversible remotely — the machine must be physically powered back on. Can be " +
+            "disabled per gate via Gate:AllowRemotePowerOff.");
     }
 }

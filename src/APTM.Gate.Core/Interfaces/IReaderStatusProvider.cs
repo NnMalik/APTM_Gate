@@ -3,7 +3,10 @@ namespace APTM.Gate.Core.Interfaces;
 public interface IReaderStatusProvider
 {
     bool IsConnected { get; }
-    DateTimeOffset? LastReadAt { get; }
+    bool ModeVerified { get; }          // Real-Time mode confirmed via read-back after init
+    DateTimeOffset? LastReadAt { get; } // last tag read
+    DateTimeOffset? LastFrameAt { get; } // last frame of any kind (tags, heartbeats, responses)
+    int IngestQueueDepth { get; }       // reads parsed but not yet persisted to raw_tag_buffer
     string? ReaderModel { get; }
     string? FirmwareVersion { get; }
     string? ReaderId { get; }

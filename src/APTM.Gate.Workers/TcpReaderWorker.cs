@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Threading.Channels;
 using APTM.Gate.Core.Enums;
 using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
@@ -37,14 +38,34 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     // Status
     private volatile bool _isConnected;
     private volatile bool _manualDisconnect;
+    private volatile bool _modeVerified;
     private DateTimeOffset? _lastReadAt;
+    private DateTimeOffset? _lastFrameAt;
     private string? _readerId;
     private string? _readerModel;
     private string? _firmwareVersion;
     private int _antennaCount = 4; // Default 4-port, auto-detected from reader info
 
+    // Decouples the TCP read loop from PostgreSQL: the loop only enqueues, a consumer
+    // task batches inserts with retry. Bounded so a long DB outage can't exhaust memory;
+    // DropOldest keeps the most recent reads, which matter most for a live race.
+    private readonly Channel<RawTagFrame> _ingestChannel = Channel.CreateBounded<RawTagFrame>(
+        new BoundedChannelOptions(50_000)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true
+        });
+
+    // If the line is silent this long (no tags, no heartbeats), actively probe the
+    // reader — a reader that lost power without a TCP FIN looks identical to an empty
+    // read field until we ask it something.
+    private static readonly TimeSpan SilenceProbeAfter = TimeSpan.FromSeconds(30);
+
     public bool IsConnected => _isConnected;
+    public bool ModeVerified => _modeVerified;
+    public int IngestQueueDepth => _ingestChannel.Reader.Count;
     public DateTimeOffset? LastReadAt => _lastReadAt;
+    public DateTimeOffset? LastFrameAt => _lastFrameAt;
     public string? ReaderModel => _readerModel;
     public string? FirmwareVersion => _firmwareVersion;
     public string? ReaderId => _readerId;
@@ -98,6 +119,9 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         RefreshSettingsSnapshot();
         _logger.LogInformation("TcpReaderWorker starting — role {Role}, target {Host}:{Port}", role, _readerHost, _readerPort);
 
+        // DB consumer runs for the worker's whole lifetime, across reconnects.
+        var ingestTask = Task.Run(() => IngestLoopAsync(stoppingToken), CancellationToken.None);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             // If manually disconnected, wait until reconnect is requested
@@ -118,6 +142,7 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             catch (Exception ex)
             {
                 _isConnected = false;
+                _modeVerified = false;
                 if (!_manualDisconnect)
                 {
                     _logger.LogWarning(ex, "Reader connection lost. Reconnecting in {Delay}ms", _reconnectDelayMs);
@@ -127,6 +152,23 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         }
 
         _isConnected = false;
+        _modeVerified = false;
+
+        // Best-effort flush of reads still queued for the DB before the host exits.
+        _ingestChannel.Writer.TryComplete();
+        try
+        {
+            await ingestTask.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Ingest queue flush timed out — {Count} reads not persisted", _ingestChannel.Reader.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ingest queue flush failed");
+        }
+
         _logger.LogInformation("TcpReaderWorker stopped");
     }
 
@@ -138,12 +180,19 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         // Re-read settings every reconnect — picks up changes from /gate/reader/settings.
         RefreshSettingsSnapshot();
 
+        _modeVerified = false;
         _client = new TcpClient { NoDelay = true, ReceiveBufferSize = 65536 };
+
+        // TCP keepalive — second line of defence (after the silence probe) against
+        // half-open connections when the reader loses power without a FIN.
+        _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+        _client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 15);
+        _client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 5);
+        _client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
 
         _logger.LogInformation("Connecting to reader at {Host}:{Port}...", _readerHost, _readerPort);
         await _client.ConnectAsync(_readerHost, _readerPort, ct);
         _stream = _client.GetStream();
-        _stream.ReadTimeout = 30000;  // 30s timeout — generous for init commands
         _stream.WriteTimeout = 5000;
         _isConnected = true;
         _logger.LogInformation("Connected to reader at {Host}:{Port}", _readerHost, _readerPort);
@@ -155,10 +204,6 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
         // Initialize the reader
         await InitializeReaderAsync(ct);
-
-        // Remove read timeout for the continuous read loop — we use DataAvailable
-        // polling instead, so a timeout would only cause false disconnects
-        _stream.ReadTimeout = System.Threading.Timeout.Infinite;
 
         // Enter real-time read loop
         await ReadLoopAsync(ct);
@@ -284,35 +329,67 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             }
         }
 
-        // 6. Switch to Real-Time Inventory mode (0x76 with 0x01)
-        try
+        // 6. Switch to Real-Time Inventory mode (0x76 with 0x01) and VERIFY via
+        // read-back (0x77). A reader that is connected but not in real-time mode
+        // reads nothing, so a failed switch must surface as a reconnect — not a
+        // warning followed by a deaf read loop.
+        const int maxModeAttempts = 3;
+        for (int attempt = 1; attempt <= maxModeAttempts && !_modeVerified; attempt++)
         {
-            var modeCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x76, [0x01]);
-            var modeResp = await SendCommandInternalAsync(modeCmd, ct);
-            if (modeResp is { Length: >= 4 } && modeResp[3] == 0x00)
-                _logger.LogInformation("Switched to Real-Time Inventory mode");
-            else
-                _logger.LogWarning("Failed to switch to Real-Time mode — status: 0x{Status:X2}",
-                    modeResp?.Length >= 4 ? modeResp[3] : 0xFF);
+            try
+            {
+                var modeCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x76, [0x01]);
+                var modeResp = await SendCommandInternalAsync(modeCmd, ct);
+                if (modeResp is { Length: >= 4 } && modeResp[3] != 0x00)
+                    _logger.LogWarning("Set Real-Time mode returned status 0x{Status:X2} (attempt {Attempt})",
+                        modeResp[3], attempt);
+
+                // Read back regardless of the set response — the reader may already
+                // be streaming and the set ack can be missed, while the read-back
+                // still confirms the mode.
+                var checkCmd = UhfFrameParser.BuildCommandFrame(0x00, 0x77, ReadOnlySpan<byte>.Empty);
+                var checkResp = await SendCommandInternalAsync(checkCmd, ct);
+                if (checkResp is { Length: >= 5 } && checkResp[3] == 0x00 && checkResp[4] == 0x01)
+                {
+                    _modeVerified = true;
+                    _logger.LogInformation("Real-Time Inventory mode verified (attempt {Attempt})", attempt);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Real-Time mode switch attempt {Attempt} failed", attempt);
+            }
+
+            if (!_modeVerified && attempt < maxModeAttempts)
+                await Task.Delay(300, ct);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not switch to Real-Time mode");
-        }
+
+        if (!_modeVerified)
+            throw new InvalidOperationException(
+                "Could not verify Real-Time Inventory mode after initialization — forcing reconnect.");
     }
 
     /// <summary>
-    /// Continuously reads from the TCP stream, extracts tag frames, and ingests them.
-    /// Uses the reader's [Len] byte framing protocol.
+    /// Continuously reads from the TCP stream, extracts frames, and enqueues tag
+    /// reads for ingestion. Uses the reader's [Len] byte framing protocol. Any valid
+    /// frame (tag or heartbeat) counts as liveness; if the line goes silent the
+    /// reader is actively probed so a half-open connection turns into a reconnect
+    /// instead of an indefinitely "connected" but deaf gate.
     /// </summary>
     private async Task ReadLoopAsync(CancellationToken ct)
     {
         var receiveBuffer = new byte[4096];
         var accumulated = new List<byte>(8192);
+        var lastActivity = DateTimeOffset.UtcNow;
 
         while (!ct.IsCancellationRequested && _client?.Connected == true)
         {
-            int bytesRead;
+            int bytesRead = 0;
+            bool dataAvailable = false;
 
             // Acquire semaphore for stream read
             await _semaphore.WaitAsync(ct);
@@ -320,23 +397,31 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
             {
                 if (_stream is null || !_client.Connected) break;
 
-                // Non-blocking check — if no data available, release and wait briefly
-                if (!_stream.DataAvailable)
+                dataAvailable = _stream.DataAvailable;
+                if (dataAvailable)
+                    bytesRead = await _stream.ReadAsync(receiveBuffer.AsMemory(), ct);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+
+            if (!dataAvailable)
+            {
+                if (DateTimeOffset.UtcNow - lastActivity > SilenceProbeAfter)
                 {
-                    _semaphore.Release();
-                    await Task.Delay(10, ct);
+                    _logger.LogInformation("No data from reader for {Seconds}s — probing connection",
+                        (int)SilenceProbeAfter.TotalSeconds);
+                    var mode = await GetReaderModeAsync(ct);
+                    if (mode.StartsWith("Error", StringComparison.Ordinal))
+                        throw new IOException("Reader is unresponsive to probe — forcing reconnect.");
+                    lastActivity = DateTimeOffset.UtcNow;
                     continue;
                 }
 
-                bytesRead = await _stream.ReadAsync(receiveBuffer.AsMemory(), ct);
+                await Task.Delay(10, ct);
+                continue;
             }
-            catch
-            {
-                _semaphore.Release();
-                throw;
-            }
-
-            _semaphore.Release();
 
             if (bytesRead == 0)
             {
@@ -346,8 +431,9 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
             accumulated.AddRange(receiveBuffer.AsSpan(0, bytesRead).ToArray());
 
-            // Extract complete tag frames from accumulated buffer
-            var (frames, consumed) = UhfFrameParser.ExtractTagFrames(
+            // Extract every complete frame: tag reports AND heartbeats. Heartbeats
+            // carry no data but prove the reader is alive.
+            var (frames, consumed) = UhfFrameParser.ExtractFrames(
                 accumulated.ToArray().AsSpan());
 
             if (consumed > 0)
@@ -357,22 +443,47 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
             if (frames.Count > 0)
             {
-                _lastReadAt = DateTimeOffset.UtcNow;
-                await IngestFramesAsync(frames, ct);
+                lastActivity = DateTimeOffset.UtcNow;
+                _lastFrameAt = lastActivity;
+
+                var tags = CollectTagFrames(frames);
+                if (tags.Count > 0)
+                {
+                    _lastReadAt = lastActivity;
+                    EnqueueTags(tags);
+                }
             }
         }
     }
 
+    /// <summary>Filters successful 0xEE tag reports out of a mixed frame list and parses them.</summary>
+    private static List<RawTagFrame> CollectTagFrames(List<byte[]> frames)
+    {
+        var tags = new List<RawTagFrame>(frames.Count);
+        foreach (var frame in frames)
+        {
+            if (frame[2] != UhfFrameParser.TagReportCmd || frame[3] != UhfFrameParser.SuccessStatus)
+                continue;
+            var tag = UhfFrameParser.ParseTagFrame(frame);
+            if (tag is not null)
+                tags.Add(tag);
+        }
+        return tags;
+    }
+
     /// <summary>
-    /// Sends a command and reads the response. Drains pending data first.
-    /// Must only be called when semaphore is NOT held by caller (init sequence),
-    /// or refactored for internal use.
+    /// Sends a command and reads its response. Must only be called when the semaphore
+    /// is NOT held by the caller (init sequence calls it directly; public API methods
+    /// go through SendCommandAsync). Pending stream data is consumed — and any tag
+    /// frames in it salvaged — before sending, and the response is matched by command
+    /// byte, so a reader streaming real-time tags cannot pollute the response.
     /// </summary>
     private async Task<byte[]?> SendCommandInternalAsync(byte[] command, CancellationToken ct)
     {
         if (_stream is null) return null;
 
-        // Drain any pending real-time data
+        // Consume pending real-time data (salvaging tag reads) so stale frames
+        // from before the command can't be matched as its response.
         await DrainStreamAsync(ct);
 
         // Send command
@@ -380,41 +491,79 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
         await _stream.WriteAsync(command, ct);
         await _stream.FlushAsync(ct);
 
-        // Wait for reader to process
-        await Task.Delay(150, ct);
+        return await ReadResponseFrameAsync(command[2], ct);
+    }
 
-        // Read response
-        var buffer = new byte[1024];
-        int bytesRead = await _stream.ReadAsync(buffer.AsMemory(), ct);
+    /// <summary>
+    /// Reads frames until the response to <paramref name="expectedCmd"/> arrives or
+    /// the timeout elapses. Interleaved 0xEE frames (tags/heartbeats) are NOT treated
+    /// as the response — tag reads among them are enqueued for ingestion, not lost.
+    /// Handles fragmented responses naturally via the accumulation buffer.
+    /// </summary>
+    private async Task<byte[]?> ReadResponseFrameAsync(byte expectedCmd, CancellationToken ct, int timeoutMs = 2500)
+    {
+        if (_stream is null) return null;
 
-        if (bytesRead < 5)
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+        var accumulated = new List<byte>(2048);
+        var buffer = new byte[2048];
+        var salvagedTags = new List<RawTagFrame>();
+
+        try
         {
-            _logger.LogWarning("Response too short: {Bytes} bytes", bytesRead);
+            while (DateTimeOffset.UtcNow < deadline && !ct.IsCancellationRequested)
+            {
+                if (!_stream.DataAvailable)
+                {
+                    await Task.Delay(20, ct);
+                    continue;
+                }
+
+                int bytesRead = await _stream.ReadAsync(buffer.AsMemory(), ct);
+                if (bytesRead == 0) return null;
+
+                accumulated.AddRange(buffer.AsSpan(0, bytesRead).ToArray());
+                var (frames, consumed) = UhfFrameParser.ExtractFrames(accumulated.ToArray().AsSpan());
+                if (consumed > 0)
+                    accumulated.RemoveRange(0, consumed);
+
+                foreach (var frame in frames)
+                {
+                    _lastFrameAt = DateTimeOffset.UtcNow;
+
+                    if (frame[2] == UhfFrameParser.TagReportCmd)
+                    {
+                        if (frame[3] == UhfFrameParser.SuccessStatus)
+                        {
+                            var tag = UhfFrameParser.ParseTagFrame(frame);
+                            if (tag is not null)
+                                salvagedTags.Add(tag);
+                        }
+                        continue; // tag report or heartbeat — not our response
+                    }
+
+                    if (frame[2] == expectedCmd)
+                    {
+                        _logger.LogDebug("Response: {Data}", BitConverter.ToString(frame));
+                        return frame;
+                    }
+
+                    _logger.LogDebug("Skipping unexpected frame (cmd 0x{Cmd:X2}) while waiting for 0x{Expected:X2}",
+                        frame[2], expectedCmd);
+                }
+            }
+
+            _logger.LogWarning("Timed out waiting for response to command 0x{Cmd:X2}", expectedCmd);
             return null;
         }
-
-        // Frame alignment: first byte is Len
-        int frameLen = buffer[0];
-        int expectedTotal = frameLen + 1;
-
-        if (bytesRead < expectedTotal)
+        finally
         {
-            _logger.LogWarning("Fragmented response: received {Actual} of {Expected}", bytesRead, expectedTotal);
-            return null;
+            if (salvagedTags.Count > 0)
+            {
+                _lastReadAt = DateTimeOffset.UtcNow;
+                EnqueueTags(salvagedTags);
+            }
         }
-
-        var response = new byte[expectedTotal];
-        Array.Copy(buffer, 0, response, 0, expectedTotal);
-
-        // Verify CRC
-        if (!UhfFrameParser.VerifyCRC(response))
-        {
-            _logger.LogWarning("CRC verification failed for response: {Data}", BitConverter.ToString(response));
-            return null;
-        }
-
-        _logger.LogDebug("Response: {Data}", BitConverter.ToString(response));
-        return response;
     }
 
     /// <summary>
@@ -434,38 +583,96 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     }
 
     /// <summary>
-    /// Drains all pending data from the stream to prevent pollution of command responses.
+    /// Consumes all pending data from the stream so stale frames can't pollute the
+    /// next command's response. In Real-Time mode "pending data" is almost always
+    /// live tag reads, so complete tag frames are salvaged into the ingest queue
+    /// instead of being discarded.
     /// </summary>
     private async Task DrainStreamAsync(CancellationToken ct)
     {
         if (_stream is null) return;
 
-        int drained = 0;
-        var discard = new byte[4096];
+        var pending = new List<byte>(4096);
+        var buffer = new byte[4096];
 
         while (_stream.DataAvailable)
         {
-            int read = await _stream.ReadAsync(discard.AsMemory(), ct);
-            drained += read;
-            if (drained > 100 * 1024) break; // Safety limit
+            int read = await _stream.ReadAsync(buffer.AsMemory(), ct);
+            if (read == 0) break;
+            pending.AddRange(buffer.AsSpan(0, read).ToArray());
+            if (pending.Count > 100 * 1024) break; // Safety limit
         }
 
-        if (drained > 0)
-            _logger.LogDebug("Drained {Bytes} bytes before command", drained);
+        if (pending.Count == 0) return;
+
+        var (frames, _) = UhfFrameParser.ExtractFrames(pending.ToArray().AsSpan());
+        if (frames.Count > 0)
+            _lastFrameAt = DateTimeOffset.UtcNow;
+
+        var tags = CollectTagFrames(frames);
+        if (tags.Count > 0)
+        {
+            _lastReadAt = DateTimeOffset.UtcNow;
+            EnqueueTags(tags);
+        }
+
+        _logger.LogDebug("Consumed {Bytes} pending bytes before command — salvaged {Tags} tag reads",
+            pending.Count, tags.Count);
     }
 
-    private async Task IngestFramesAsync(IReadOnlyList<RawTagFrame> frames, CancellationToken ct)
+    /// <summary>Hands parsed tag frames to the DB consumer. Never blocks the read path.</summary>
+    private void EnqueueTags(IReadOnlyList<RawTagFrame> tags)
     {
-        try
+        foreach (var tag in tags)
+            _ingestChannel.Writer.TryWrite(tag); // bounded DropOldest — TryWrite always succeeds
+    }
+
+    /// <summary>
+    /// Consumes queued tag reads and batch-inserts them into raw_tag_buffer. A failed
+    /// insert is retried with backoff instead of dropping the batch — a brief DB
+    /// outage mid-race must not lose reads. Runs until the channel is completed
+    /// (worker shutdown), then drains what it can.
+    /// </summary>
+    private async Task IngestLoopAsync(CancellationToken ct)
+    {
+        var reader = _ingestChannel.Reader;
+
+        while (await reader.WaitToReadAsync(CancellationToken.None))
         {
-            using var scope = _scopeFactory.CreateScope();
-            var tagBuffer = scope.ServiceProvider.GetRequiredService<ITagBufferService>();
-            await tagBuffer.InsertRawTagsAsync(frames, ct);
-            _logger.LogDebug("Ingested {Count} tag frames", frames.Count);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to ingest {Count} tag frames", frames.Count);
+            var batch = new List<RawTagFrame>(200);
+            while (batch.Count < 200 && reader.TryRead(out var frame))
+                batch.Add(frame);
+            if (batch.Count == 0) continue;
+
+            if (reader.Count > 40_000)
+                _logger.LogWarning("Ingest queue depth {Depth} — DB is falling behind; oldest reads drop at 50k", reader.Count);
+
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var tagBuffer = scope.ServiceProvider.GetRequiredService<ITagBufferService>();
+                    await tagBuffer.InsertRawTagsAsync(batch, CancellationToken.None);
+                    _logger.LogDebug("Ingested {Count} tag frames", batch.Count);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    if (ct.IsCancellationRequested && attempt >= 2)
+                    {
+                        _logger.LogError(ex, "Dropping {Count} reads — shutting down and DB insert keeps failing", batch.Count);
+                        break;
+                    }
+
+                    var delayMs = Math.Min(30_000, 500 * (1 << Math.Min(attempt, 6)));
+                    _logger.LogError(ex, "Insert of {Count} reads failed (attempt {Attempt}) — retrying in {Delay}ms (queued: {Depth})",
+                        batch.Count, attempt, delayMs, reader.Count);
+
+                    try { await Task.Delay(delayMs, ct); }
+                    catch (OperationCanceledException) { /* shutting down — one final attempt */ }
+                }
+            }
         }
     }
 
@@ -508,12 +715,14 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
 
             _logger.LogInformation("Reset command sent. Reader is rebooting...");
             _isConnected = false;
+            _modeVerified = false;
             return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during reader reset");
             _isConnected = false;
+            _modeVerified = false;
             return false;
         }
         finally
@@ -574,7 +783,10 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     {
         var cmd = UhfFrameParser.BuildCommandFrame(0x00, 0x76, [mode]);
         var resp = await SendCommandAsync(cmd, ct);
-        return resp is { Length: >= 4 } && resp[3] == 0x00;
+        var ok = resp is { Length: >= 4 } && resp[3] == 0x00;
+        if (ok)
+            _modeVerified = mode == 0x01; // manual switch away from real-time un-verifies
+        return ok;
     }
 
     public async Task<byte[]?> GetAntennaPowersAsync(CancellationToken ct = default)
@@ -656,6 +868,7 @@ public sealed class TcpReaderWorker : BackgroundService, IReaderStatusProvider
     {
         _manualDisconnect = true;
         _isConnected = false;
+        _modeVerified = false;
         DisposeConnection();
         _logger.LogInformation("Reader manually disconnected");
         return Task.FromResult(true);

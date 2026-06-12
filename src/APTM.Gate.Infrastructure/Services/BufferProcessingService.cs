@@ -177,7 +177,10 @@ public sealed class BufferProcessingService : IBufferProcessingService
                 CandidateId = null,                       // checkpoint never resolves a candidate
                 TagEPC = row.TagEPC,
                 EventType = "checkpoint",
-                EventId = null,                           // no test/event awareness
+                // Pass through the active event stamped at ingestion (null when no config
+                // was loaded — the normal midpoint case). The field app prefers this over
+                // its own gun-window inference when present.
+                EventId = row.EventId,
                 ReadTime = row.ReadTime,
                 DurationSeconds = null,
                 HeatNumber = null,

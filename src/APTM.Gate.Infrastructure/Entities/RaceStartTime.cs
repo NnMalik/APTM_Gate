@@ -13,6 +13,21 @@ public class RaceStartTime
     public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// The HHT→gate clock offset (ms) actually applied to convert OriginalGunStartTime
+    /// into GunStartTime. With a measured offset this is the value from the push payload;
+    /// with the legacy receipt heuristic it's (ReceivedAt − OriginalGunStartTime).
+    /// Null for rows created before this audit existed.
+    /// </summary>
+    public long? AppliedOffsetMs { get; set; }
+
+    /// <summary>
+    /// How GunStartTime was derived: "measured" (NTP-style offset carried in the push —
+    /// immune to push delay) or "receipt" (legacy: assumes the push arrived instantly,
+    /// so any queue/retry delay shortens the heat's elapsed times). Null for legacy rows.
+    /// </summary>
+    public string? OffsetMethod { get; set; }
+
+    /// <summary>
     /// Operator group that started this heat. Soft-link to <see cref="OperatorGroupEntity"/> —
     /// nullable for legacy heats started before the grouping feature, and for tests
     /// configured with no operator groups (decision #1: "no group = legacy mode").

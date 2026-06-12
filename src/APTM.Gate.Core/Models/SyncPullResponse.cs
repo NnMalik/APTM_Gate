@@ -10,6 +10,15 @@ public sealed class SyncPullResponse
     public long? SyncDataHighWaterMs { get; set; }
 
     /// <summary>
+    /// The highest processed_events.id currently on the gate (0 when empty). Lets the
+    /// puller detect a wiped/reset gate: after /gate/race-data/clear the BIGSERIAL
+    /// restarts at 1, so a client whose cached high-water mark exceeds this value is
+    /// asking for ids that will never exist again — it must reset its mark and re-pull
+    /// from 0. Without this check, pulls after a wipe silently return empty forever.
+    /// </summary>
+    public long MaxEventId { get; set; }
+
+    /// <summary>
     /// The NUC's wall-clock at the moment this response was built. Lets the Field app
     /// compute the per-gate clock offset (NUC vs tablet) for checkpoint verification
     /// and downstream time-window event attribution. Especially important for headless

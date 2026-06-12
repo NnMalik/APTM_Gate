@@ -141,8 +141,10 @@ public sealed class GateIdentityService : IGateIdentityService
             // Restart required when:
             // - first-time provisioning (prevRole is null — workers need to register)
             // - role change (different worker set needs to be wired up at startup)
-            // - checkpoint sequence change (BufferProcessingService dedup keys off it)
-            var restartRequired = prevRole != request.Role || prevSequence != request.CheckpointSequence;
+            // A sequence-only change applies live: BufferProcessingService re-reads the
+            // identity from the (just invalidated) provider on every batch, and
+            // TcpReaderWorker only checks the role at startup, never the sequence.
+            var restartRequired = prevRole != request.Role;
 
             // Re-read fresh row for response
             var info = await GetAsync(ct);
