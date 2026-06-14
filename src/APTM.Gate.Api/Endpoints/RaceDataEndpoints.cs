@@ -81,7 +81,7 @@ public static class RaceDataEndpoints
             // important: callers track high-water-marks by id, so we want them back at 0).
             await db.Database.ExecuteSqlRawAsync(
                 "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, " +
-                "received_sync_data, sync_logs, heat_completions " +
+                "received_sync_data, sync_log, heat_completions " +
                 "RESTART IDENTITY CASCADE", ct);
 
             // Audit trail: write a marker row to sync_logs so a forensic trace exists.
