@@ -76,7 +76,19 @@
       "Bash(cat lib/features/blank_hub/ui/blank_hub_screen.dart)",
       "Bash(cat lib/features/scene_control/state/scene_providers.dart)",
       "Bash(flutter analyze *)",
-      "Bash(Find C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_SN\\\\APTM_SN\\\\src\\\\APTM.Infrastructure -name \"*.cs\" -type f)"
+      "Bash(Find C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_SN\\\\APTM_SN\\\\src\\\\APTM.Infrastructure -name \"*.cs\" -type f)",
+      "Bash(./gradlew :app:compileDebugKotlin)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\src\\\\APTM.Gate.Core\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\src\\\\APTM.Gate.Infrastructure\" -Recurse -Include \"*.cs\")",
+      "Bash(grep -n \"^\\\\s*//\" \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\src\\\\APTM.Gate.Infrastructure\\\\Services\\\\BufferProcessingService.cs\")",
+      "Bash(xargs -I {} basename {})",
+      "Bash(grep -r \"^\\\\s*//.*\" APTM.Gate.Api/Program.cs APTM.Gate.Api/Services/*.cs APTM.Gate.Workers/DependencyInjection.cs)",
+      "Bash(grep -v \"//\\\\|sealed class\")",
+      "Bash(grep -n \"^\\\\s*//\" DependencyInjection.cs)",
+      "Bash(cd /c/Users/DeLL/source/repos/APTM_FIELD && find . -type f -name \"*.kt\" -o -name \"*.java\" -o -name \"*.xml\" | head -20)",
+      "Bash(xargs basename -a)"
     ]
   }
 }

@@ -15,7 +15,7 @@ builder.Host.UseSystemd();
 // Infrastructure: DbContext, services
 builder.Services.AddInfrastructureServices(builder.Configuration);
 
-// Workers: TcpReaderWorker, BufferProcessorWorker, WatchdogService
+// Workers: TcpReaderWorker, BufferProcessorWorker
 builder.Services.AddWorkerServices();
 
 // SSE Notification Service (singleton + hosted service)

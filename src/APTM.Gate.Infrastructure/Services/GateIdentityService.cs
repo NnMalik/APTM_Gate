@@ -56,16 +56,21 @@ public sealed class GateIdentityService : IGateIdentityService
             return SetIdentityResult.Ok(ToInfo(existing), restartRequired: false);
         }
 
-        // Same role + sequence, only the name differs — a pure rename. No restart, no purge,
-        // no conflict: renaming a gate is always safe and never requires force.
-        if (existing is not null
-            && existing.Role == request.Role
-            && existing.CheckpointSequence == request.CheckpointSequence)
+        // Same ROLE — only the sequence and/or name differ. The role is what drives worker
+        // registration (TcpReaderWorker checks the role once at startup; BufferProcessingService
+        // re-reads the identity every batch and never depends on the sequence). So this is a
+        // safe LIVE update: no force, no read purge, no restart. Covers both a pure rename and
+        // correcting a checkpoint's sequence number — neither should be destructive or require
+        // re-provisioning. Only an actual role change falls through to the conflict/force path.
+        if (existing is not null && existing.Role == request.Role)
         {
+            existing.CheckpointSequence = request.CheckpointSequence;
             existing.Name = name;
             existing.SetAt = DateTimeOffset.UtcNow;
             existing.SetBy = setBy;
             await _db.SaveChangesAsync(ct);
+            // Invalidate the in-memory cache so the buffer processor picks up the new sequence
+            // on its next batch without a service restart.
             _identityProvider.Invalidate();
             return SetIdentityResult.Ok(ToInfo(existing), restartRequired: false);
         }
