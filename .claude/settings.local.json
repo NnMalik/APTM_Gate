@@ -51,7 +51,32 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Tab\\\\lib\\\\operator\\\\screens\" -Filter \"*.dart\")",
       "Bash(APTM\" | head -10)",
       "PowerShell(dotnet build \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Backend\" --nologo -v q 2>$null)",
-      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Backend\\\\README.md\" -Raw\\) -replace 'RoundStateMachine, LaneAllocator, GloveMapper, RepCounter', 'RoundStateMachine, LaneAllocator, GloveTagRule, RepCounter' | Set-Content \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Backend\\\\README.md\" -Encoding utf8 -NoNewline)"
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Backend\\\\README.md\" -Raw\\) -replace 'RoundStateMachine, LaneAllocator, GloveMapper, RepCounter', 'RoundStateMachine, LaneAllocator, GloveTagRule, RepCounter' | Set-Content \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\\\\5_MTR_Shuttle_Backend\\\\README.md\" -Encoding utf8 -NoNewline)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_FIELD\" -Recurse -Directory -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 50 FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\5_MTR_Shuttle\" -Recurse -Depth 2)",
+      "Bash(Select-Object -Property FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(cat lib/models/scene.dart)",
+      "Bash(cat lib/features/scene_control/ui/scene_control_screen.dart)",
+      "Bash(cat src/config.js)",
+      "Bash(cat src/display/server.js)",
+      "Bash(bash -n setup-scoreboard.sh)",
+      "Bash(command -v shellcheck)",
+      "Bash(shellcheck -S error setup-scoreboard.sh)",
+      "PowerShell($ErrorActionPreference='Stop'; $f=\"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\Scoreboard\\\\Scoreboard_backend\\\\deploy\\\\build-bundle.ps1\"; $errs=$null; [void][System.Management.Automation.Language.Parser]::ParseFile\\($f,[ref]$null,[ref]$errs\\); if\\($errs\\){$errs|ForEach-Object{$_.Message}}else{\"PS PARSE OK\"}; & $f -Ref feat/aptm-start-scene -SkipZip)",
+      "PowerShell(& \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\Scoreboard\\\\Scoreboard_backend\\\\deploy\\\\build-bundle.ps1\" -SkipZip)",
+      "PowerShell($ErrorActionPreference='Stop')",
+      "Bash(cat src/api/pairing.js)",
+      "Bash(cat src/api/index.js)",
+      "Bash(cat src/ws/index.js)",
+      "Bash(cat src/services/pairing.js)",
+      "Bash(cat lib/features/announcements/ui/announcement_composer.dart)",
+      "Bash(cat lib/features/video_hub/ui/video_hub_screen.dart)",
+      "Bash(cat lib/features/blank_hub/ui/blank_hub_screen.dart)",
+      "Bash(cat lib/features/scene_control/state/scene_providers.dart)",
+      "Bash(flutter analyze *)",
+      "Bash(Find C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_SN\\\\APTM_SN\\\\src\\\\APTM.Infrastructure -name \"*.cs\" -type f)"
     ]
   }
 }

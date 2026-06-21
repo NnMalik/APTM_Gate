@@ -41,22 +41,10 @@ public sealed class GateConfigService : IGateConfigService
         if (thisGate is null)
             return ConfigResult.Fail($"Gate '{_deviceCode}' not found in config package gates list.");
 
-        // Validate the package's gateType against the provisioned identity. The package's role
-        // is informational only — identity wins. Mismatch means the field app sent the wrong
-        // package or someone re-imaged a NUC without updating Main's gate registry.
-        if (!string.Equals(thisGate.GateType, identity.Role, StringComparison.OrdinalIgnoreCase))
-        {
-            return ConfigResult.Fail(
-                $"Config role mismatch. Package says '{thisGate.GateType}', " +
-                $"this gate is provisioned as '{identity.Role}'. " +
-                $"Re-push a corrected config or use PUT /gate/identity?force=true to re-provision.");
-        }
-        if (identity.Role == "Checkpoint" && thisGate.CheckpointSequence != identity.CheckpointSequence)
-        {
-            return ConfigResult.Fail(
-                $"Checkpoint sequence mismatch. Package says {thisGate.CheckpointSequence}, " +
-                $"this gate is provisioned as sequence {identity.CheckpointSequence}.");
-        }
+        // Role and checkpoint sequence come solely from gate_identity (set once via PUT
+        // /gate/identity and persisted). The config package no longer carries the gate role —
+        // any GateType/CheckpointSequence on the package entry is ignored, never validated, and
+        // never written. This keeps provisioning a deliberate, separate step from config push.
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
@@ -83,7 +71,7 @@ public sealed class GateConfigService : IGateConfigService
                     // here because it's per-race state (one row per heat finish/cancel) and
                     // would otherwise leak across test instances.
                     await _db.Database.ExecuteSqlRawAsync(
-                        "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, received_sync_data, sync_logs, heat_completions CASCADE", ct);
+                        "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, received_sync_data, sync_log, heat_completions CASCADE", ct);
                 }
                 // If not fully synced, old data remains (will be collected on next pull)
             }
