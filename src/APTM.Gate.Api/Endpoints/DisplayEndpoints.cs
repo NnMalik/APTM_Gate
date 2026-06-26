@@ -59,25 +59,38 @@ public static class DisplayEndpoints
                 .Distinct()
                 .CountAsync(ct);
 
-            // Active heat = the most recent RaceStartTime that hasn't been cancelled.
-            // Cancelled heats are kept in race_start_times for audit; HeatCompletion
-            // with closure_reason='cancelled' is the canonical "this heat was aborted"
-            // marker (also keeps the start gate display in sync via the existing
-            // sync_data SSE channel — heat_completion replication is automatic).
+            // Live heats = race starts not cancelled, scoped to the active event. A PARALLEL
+            // event (e.g. cross-country) can have several heats live at once, each started by a
+            // different HHT; a SPRINT event (e.g. 100m) has one at a time. Cancelled heats are
+            // kept in race_start_times for audit; a HeatCompletion with closure_reason='cancelled'
+            // is the canonical "aborted" marker.
             var cancelledHeatIds = await db.HeatCompletions
                 .Where(hc => hc.ClosureReason == "cancelled")
                 .Select(hc => hc.HeatId)
                 .ToListAsync(ct);
 
-            var latestRaceStart = await db.RaceStartTimes
-                .Where(r => !cancelledHeatIds.Contains(r.HeatId))
+            var liveStarts = await db.RaceStartTimes
+                .Where(r => !cancelledHeatIds.Contains(r.HeatId)
+                         && (r.EventId == activeEventId || r.EventId == null))
                 .OrderByDescending(r => r.ReceivedAt)
-                .FirstOrDefaultAsync(ct);
+                .ToListAsync(ct);
 
-            ActiveHeatData? activeHeat = null;
-            if (latestRaceStart is not null)
+            // Group-name lookup for per-group row labels (falls back to "Group N").
+            var groupNames = await db.OperatorGroups
+                .AsNoTracking()
+                .ToDictionaryAsync(g => g.GroupId, g => g.Name, ct);
+
+            // Completions for these heats — a completed heat's timer freezes on the display.
+            var liveHeatIds = liveStarts.Select(s => s.HeatId).ToList();
+            var completions = await db.HeatCompletions
+                .AsNoTracking()
+                .Where(hc => liveHeatIds.Contains(hc.HeatId))
+                .ToDictionaryAsync(hc => hc.HeatId, ct);
+
+            var activeHeats = new List<ActiveHeatData>(liveStarts.Count);
+            foreach (var rs in liveStarts)
             {
-                var candidateIds = latestRaceStart.CandidateIds ?? [];
+                var candidateIds = rs.CandidateIds ?? [];
                 var heatCandidates = await db.Candidates
                     .Where(c => candidateIds.Contains(c.CandidateId))
                     .Select(c => new HeatCandidateData
@@ -88,43 +101,60 @@ public static class DisplayEndpoints
                     })
                     .ToListAsync(ct);
 
-                // Has this heat already been marked complete? (auto by finish gate, or
-                // force-closed by field app for DNF). If yes, the display should freeze.
-                var completion = await db.HeatCompletions
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(hc => hc.HeatId == latestRaceStart.HeatId, ct);
+                completions.TryGetValue(rs.HeatId, out var completion);
 
-                // Live progress count (only meaningful while the heat is in progress; harmless when complete).
-                // Voided rows (heat cancelled or candidate removed) are excluded so the
-                // count reflects what's still on the leaderboard.
-                var roster = candidateIds;
-                var finishedCount = roster.Length == 0
+                var finishedCount = candidateIds.Length == 0
                     ? 0
                     : await db.ProcessedEvents
                         .Where(pe => pe.EventType == "finish"
                                   && pe.IsFirstRead
                                   && !pe.Voided
-                                  && pe.HeatNumber == latestRaceStart.HeatNumber
+                                  && pe.HeatNumber == rs.HeatNumber
                                   && pe.CandidateId != null
-                                  && roster.Contains(pe.CandidateId.Value))
+                                  && candidateIds.Contains(pe.CandidateId.Value))
                         .Select(pe => pe.CandidateId)
                         .Distinct()
                         .CountAsync(ct);
 
-                activeHeat = new ActiveHeatData
+                var label = rs.GroupId.HasValue
+                            && groupNames.TryGetValue(rs.GroupId.Value, out var gname)
+                            && !string.IsNullOrWhiteSpace(gname)
+                    ? gname
+                    : $"Group {rs.HeatNumber}";
+
+                activeHeats.Add(new ActiveHeatData
                 {
-                    HeatId = latestRaceStart.HeatId,
-                    HeatNumber = latestRaceStart.HeatNumber,
+                    HeatId = rs.HeatId,
+                    HeatNumber = rs.HeatNumber,
+                    GroupId = rs.GroupId,
+                    GroupLabel = label,
                     HasStartTime = true,
-                    GunStartTime = latestRaceStart.GunStartTime,
-                    OriginalGunStartTime = latestRaceStart.OriginalGunStartTime,
+                    GunStartTime = rs.GunStartTime,
+                    OriginalGunStartTime = rs.OriginalGunStartTime,
                     Candidates = heatCandidates,
-                    ExpectedCount = roster.Length,
+                    ExpectedCount = candidateIds.Length,
                     FinishedCount = completion?.FinishedCount ?? finishedCount,
                     CompletedAt = completion?.CompletedAt,
                     ClosureReason = completion?.ClosureReason
-                };
+                });
             }
+
+            // SPRINT mode / back-compat consumers use the most recent live heat.
+            var activeHeat = activeHeats.FirstOrDefault();
+
+            // Display mode for the active event. Main resolves the explicit per-event flag (and its
+            // type default) into test_events.DisplayMode, so we use that. Fall back to deriving from
+            // the event type only for legacy gate data pushed before the flag existed (DisplayMode null).
+            var activeEventRow = activeEventId == null ? null : await db.TestEvents
+                .AsNoTracking()
+                .Where(e => e.EventId == activeEventId)
+                .Select(e => new { e.DisplayMode, e.EventType })
+                .FirstOrDefaultAsync(ct);
+            var displayMode = !string.IsNullOrWhiteSpace(activeEventRow?.DisplayMode)
+                ? activeEventRow!.DisplayMode!.ToUpperInvariant()
+                : (string.Equals(activeEventRow?.EventType, "CROSS_COUNTRY", StringComparison.OrdinalIgnoreCase)
+                    ? "PARALLEL"
+                    : "SPRINT");
 
             // Get finish reads for current event only (reads from denormalized columns — no JOIN).
             // Filter out null CandidateId (only checkpoint events have null; finish always resolves).
@@ -221,7 +251,9 @@ public static class DisplayEndpoints
                 ScheduledDate = gateConfig.ScheduledDate.ToString("yyyy-MM-dd"),
                 TotalCandidates = totalCandidates,
                 TotalGroups = totalGroups,
+                DisplayMode = displayMode,
                 ActiveHeat = activeHeat,
+                ActiveHeats = activeHeats,
                 FinishReads = finishReads,
                 StartReads = startReads,
                 Attendance = new AttendanceData

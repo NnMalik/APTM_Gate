@@ -358,6 +358,59 @@ public sealed class BufferProcessingService : IBufferProcessingService
         // after SaveChangesAsync makes the new rows queryable.
         var heatsTouched = new HashSet<Guid>();
 
+        // ── Re-resolve previously-UNRESOLVED finishes ─────────────────────────────
+        // A group started by a lagging HHT can land its finish reads BEFORE its race_start
+        // reaches this gate (the IP/sync delays we've seen) — those were parked UNRESOLVED and,
+        // before this, stayed lost forever, which is exactly "the finish gate ignored a group".
+        // Each finish cycle, retry matching UNRESOLVED reads against the now-known guns.
+        if (eventType == "finish" && raceStarts.Count > 0)
+        {
+            var unresolved = await _db.ProcessedEvents
+                .Where(pe => pe.EventType == "finish"
+                          && pe.Status == "UNRESOLVED"
+                          && pe.CandidateId != null
+                          && (activeEventId == null || pe.EventId == activeEventId))
+                .ToListAsync(ct);
+
+            if (unresolved.Count > 0)
+            {
+                // Don't re-resolve a candidate who already has a real (resolved, non-voided)
+                // finish — that UNRESOLVED row is a genuine stray/duplicate, not their result.
+                var alreadyResolved = (await _db.ProcessedEvents
+                    .Where(pe => pe.EventType == "finish"
+                              && pe.Status != "UNRESOLVED"
+                              && !pe.Voided
+                              && pe.CandidateId != null
+                              && (activeEventId == null || pe.EventId == activeEventId))
+                    .Select(pe => pe.CandidateId!.Value)
+                    .Distinct()
+                    .ToListAsync(ct)).ToHashSet();
+
+                var resolvedThisPass = new HashSet<Guid>();
+                foreach (var ev in unresolved.OrderBy(e => e.ReadTime))
+                {
+                    var cid = ev.CandidateId!.Value;
+                    if (alreadyResolved.Contains(cid) || resolvedThisPass.Contains(cid)) continue;
+
+                    var match = raceStarts.FirstOrDefault(r =>
+                        r.CandidateIds is not null && r.CandidateIds.Contains(cid));
+                    if (match is null) continue;
+
+                    var elapsed = ev.ReadTime - match.GunStartTime;
+                    if (elapsed.TotalSeconds <= 0) continue;   // read predates this gun — still invalid
+
+                    ev.DurationSeconds = (decimal)elapsed.TotalSeconds;
+                    ev.HeatNumber = match.HeatNumber;
+                    ev.HeatId = match.HeatId;
+                    ev.GroupId = match.GroupId;
+                    ev.Status = null;            // resolved
+                    ev.IsFirstRead = true;
+                    resolvedThisPass.Add(cid);
+                    heatsTouched.Add(match.HeatId);
+                }
+            }
+        }
+
         foreach (var row in pendingRows)
         {
             if (!tagMap.TryGetValue(row.TagEPC, out var candidateId))

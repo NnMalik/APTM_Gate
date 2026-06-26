@@ -8,7 +8,7 @@ namespace APTM.Gate.Api.Endpoints;
 /// HTML based on the provisioned role:
 /// <list type="bullet">
 /// <item>Start    → led-start-display.html</item>
-/// <item>Finish   → finish-display.html</item>
+/// <item>Finish   → finish-mini.html</item>
 /// <item>Checkpoint → 204 No Content (headless gate, no screen)</item>
 /// <item>un-provisioned → 503 with a hint</item>
 /// </list>
@@ -40,7 +40,7 @@ public static class RootEndpoints
             return role switch
             {
                 GateRole.Start  => ServeFile(env, "led-start-display.html"),
-                GateRole.Finish => ServeFile(env, "finish-display.html"),
+                GateRole.Finish => ServeFile(env, "finish-mini.html"),
                 GateRole.Checkpoint => Results.NoContent(),
                 _ => Results.NotFound()
             };

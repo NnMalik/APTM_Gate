@@ -100,6 +100,8 @@ public class ConfigEventDto
     public bool IsRequired { get; set; }
     public int ScoringTypeId { get; set; }
     public string ScoringTypeName { get; set; } = default!;
+    /// <summary>"SPRINT" | "PARALLEL", resolved by Main. Null on older Main versions.</summary>
+    public string? DisplayMode { get; set; }
     public List<ConfigScoringStatusDto> ScoringStatuses { get; set; } = [];
 }
 

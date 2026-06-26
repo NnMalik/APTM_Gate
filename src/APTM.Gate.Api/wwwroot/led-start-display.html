@@ -100,6 +100,47 @@
             color: #000;
         }
 
+        /* ── Per-group list (PARALLEL events) ── */
+        .group-list {
+            flex: 1;
+            display: none;          /* shown only in PARALLEL mode */
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+            overflow: hidden;
+        }
+        .group-list.show { display: flex; }
+        .grp {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            border-bottom: 1px solid #d1d5db;
+            padding-bottom: 4px;
+        }
+        .grp .gl { min-width: 0; }
+        .grp .gn {
+            font-size: 15px;
+            font-weight: 800;
+            line-height: 1.05;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 120px;
+        }
+        .grp .gs {
+            font-size: 11px;
+            font-weight: 600;
+            color: #374151;
+        }
+        .grp .gt {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -1px;
+        }
+        .grp .gt.frozen { color: #15803d; }   /* green once the group's last candidate has passed */
+
         /* ── Groups/Batches (bottom) ── */
         .groups {
             text-align: center;
@@ -140,15 +181,19 @@
         </div>
     </div>
 
+    <!-- PARALLEL mode: one row per live group (start time + its own timer that freezes
+         when the group's last candidate passes). Hidden in SPRINT mode. -->
+    <div class="group-list" id="groupList"></div>
+
     <!--
-      Heat card — display.js toggles this between block/none.
+      SPRINT mode heat card — display.js toggles this between block/none.
       Starts hidden; becomes visible when race_start arrives (or initial data has an active heat).
     -->
     <div class="timer-wrap" id="heatCard" style="display:none;">
         <div class="timer" id="heatTimer">00:00.000</div>
     </div>
 
-    <!-- Placeholder so layout doesn't collapse before race_start -->
+    <!-- Placeholder so layout doesn't collapse before race_start (SPRINT mode) -->
     <div class="timer-wrap" id="timerPlaceholder">
         <div class="timer">00:00.000</div>
     </div>
@@ -176,7 +221,10 @@
         const placeholder = document.getElementById('timerPlaceholder');
 
         // Watch heatCard for display changes (display.js toggles it via applyHeat/clearHeat).
+        // In PARALLEL mode the per-group list owns the screen — keep both the SPRINT timer
+        // and its placeholder hidden regardless of what display.js does to #heatCard.
         const cardObserver = new MutationObserver(() => {
+            if (parallelMode) { placeholder.style.display = 'none'; heatCard.style.display = 'none'; return; }
             const live = heatCard.style.display !== 'none';
             placeholder.style.display = live ? 'none' : 'flex';
         });
@@ -197,6 +245,95 @@
         function onRaceStart(data) {
             setTimeout(Display.loadDisplayData, 300);
         }
+
+        // ── PARALLEL mode (cross-country etc.): per-group start times + timers ──────
+        const PARALLEL_MAX_ROWS = 4;     // legibility cap on the small LED panel
+        const PARALLEL_ROTATE_MS = 4000; // when >4 groups, cycle the visible window
+        let parallelMode = false;
+        let parallelHeats = [];          // [{ groupLabel, gunStartTime, completedAt }]
+        let rotateOffset = 0;
+
+        // Called by display.js on every (re)load with the full payload.
+        function onDisplayData(data) {
+            parallelMode = (data.displayMode || 'SPRINT').toUpperCase() === 'PARALLEL';
+
+            const list = document.getElementById('groupList');
+            const card = document.getElementById('heatCard');
+            const ph = document.getElementById('timerPlaceholder');
+
+            if (parallelMode) {
+                // Hand the screen over to the per-group list; suppress the single SPRINT timer.
+                parallelHeats = (data.activeHeats || []).slice().sort((a, b) => a.heatNumber - b.heatNumber);
+                rotateOffset = 0;
+                list.classList.add('show');
+                card.style.display = 'none';
+                ph.style.display = 'none';
+                renderGroups();
+            } else {
+                parallelHeats = [];
+                list.classList.remove('show');
+                // SPRINT visibility is managed by display.js applyHeat/clearHeat + the observer.
+            }
+        }
+
+        function renderGroups() {
+            const list = document.getElementById('groupList');
+            if (!parallelMode) return;
+            if (parallelHeats.length === 0) {
+                list.innerHTML = '<div class="grp"><div class="gl"><div class="gn">No group started</div></div></div>';
+                return;
+            }
+            // Rotation window when more groups than rows fit.
+            let view = parallelHeats;
+            if (parallelHeats.length > PARALLEL_MAX_ROWS) {
+                view = [];
+                for (let i = 0; i < PARALLEL_MAX_ROWS; i++) {
+                    view.push(parallelHeats[(rotateOffset + i) % parallelHeats.length]);
+                }
+            }
+            list.innerHTML = view.map(h => {
+                const gun = h.gunStartTime ? new Date(h.gunStartTime) : null;
+                const startTxt = gun ? Display.formatClockTime(
+                    h.originalGunStartTime ? new Date(h.originalGunStartTime) : gun).slice(0, 8) : '--';
+                return '<div class="grp">' +
+                    '<div class="gl"><div class="gn">' + escapeHtmlLocal(h.groupLabel || ('Group ' + h.heatNumber)) + '</div>' +
+                    '<div class="gs">' + startTxt + '</div></div>' +
+                    '<div class="gt" data-hn="' + h.heatNumber + '">--:--</div></div>';
+            }).join('');
+            tickGroups();
+        }
+
+        // Per-group elapsed: live (now - gun) or frozen (completedAt - gun, green) once complete.
+        function tickGroups() {
+            if (!parallelMode) return;
+            const list = document.getElementById('groupList');
+            list.querySelectorAll('.gt').forEach(el => {
+                const hn = Number(el.getAttribute('data-hn'));
+                const h = parallelHeats.find(x => x.heatNumber === hn);
+                if (!h || !h.gunStartTime) { el.textContent = '--:--'; return; }
+                const gun = new Date(h.gunStartTime).getTime();
+                if (h.completedAt) {
+                    el.textContent = Display.formatElapsed(Math.max(0, (new Date(h.completedAt).getTime() - gun) / 1000));
+                    el.classList.add('frozen');
+                } else {
+                    el.textContent = Display.formatElapsed(Math.max(0, (Date.now() - gun) / 1000));
+                    el.classList.remove('frozen');
+                }
+            });
+        }
+
+        function escapeHtmlLocal(s) {
+            const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+        }
+
+        // Drive the live per-group timers and the rotation window.
+        setInterval(tickGroups, 100);
+        setInterval(() => {
+            if (parallelMode && parallelHeats.length > PARALLEL_MAX_ROWS) {
+                rotateOffset = (rotateOffset + PARALLEL_MAX_ROWS) % parallelHeats.length;
+                renderGroups();
+            }
+        }, PARALLEL_ROTATE_MS);
     </script>
 </body>
 </html>

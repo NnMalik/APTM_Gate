@@ -159,6 +159,48 @@
             100% { background: #ffffff; }
         }
         .card.new-card { animation: flash 0.8s ease-out; }
+
+        /* ── Per-group list (PARALLEL events) — replaces the grid in that mode ── */
+        .group-list {
+            height: 214px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px;
+            overflow: hidden;
+        }
+        .group-list.show { display: flex; }
+        .grow {
+            display: grid;
+            grid-template-columns: 1fr 150px 80px;
+            align-items: center;
+            border: 2px solid #000;
+            padding: 2px 10px;
+            height: 44px;
+        }
+        .grow .gleft { min-width: 0; }
+        .grow .gname {
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .grow .gstart { font-size: 12px; font-weight: 600; color: #333; }
+        .grow .gtimer {
+            font-size: 26px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+        }
+        .grow .gtimer.frozen { color: #15803d; }   /* green once the group's last candidate passed */
+        .grow .gcount {
+            font-size: 18px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -204,6 +246,10 @@
         <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
         <div class="card empty"><div class="jacket">----</div><div class="time">00:00:000</div></div>
     </div>
+
+    <!-- PARALLEL mode: one row per live group (start time + freezing per-group timer +
+         finished/expected). Replaces the grid for cross-country-style events. -->
+    <div class="group-list" id="groupList"></div>
 
     <!-- Hidden elements required by display.js (feed/toast no-ops) -->
     <div id="activityFeed" style="display:none;"></div>
@@ -293,12 +339,19 @@
         }
 
         function onRaceStart(data) {
-            // Clear cards for the new heat
+            // PARALLEL: a new group joining shouldn't wipe the screen — just refresh the list.
+            if (parallelMode) { setTimeout(Display.loadDisplayData, 300); return; }
+            // SPRINT (sequential heats, e.g. 100m): the new heat replaces the previous board.
             cards.length = 0;
             seen.clear();
             completedCount = 0;
             renderCards();
             updateStats();
+        }
+
+        function onHeatComplete(data) {
+            // PARALLEL: re-pull so the completed group's timer freezes (and its count finalises).
+            if (parallelMode) setTimeout(Display.loadDisplayData, 300);
         }
 
         function onSyncData(data) {
@@ -307,6 +360,85 @@
                 setTimeout(Display.loadDisplayData, 300);
             }
         }
+
+        // ── PARALLEL mode (cross-country etc.): per-group rows instead of the finisher grid ──
+        const PARALLEL_MAX_ROWS = 4;
+        const PARALLEL_ROTATE_MS = 4000;
+        let parallelMode = false;
+        let parallelHeats = [];
+        let rotateOffset = 0;
+
+        function onDisplayData(data) {
+            parallelMode = (data.displayMode || 'SPRINT').toUpperCase() === 'PARALLEL';
+            const grid = document.getElementById('cardGrid');
+            const list = document.getElementById('groupList');
+            if (parallelMode) {
+                parallelHeats = (data.activeHeats || []).slice().sort((a, b) => a.heatNumber - b.heatNumber);
+                rotateOffset = 0;
+                grid.style.display = 'none';
+                list.classList.add('show');
+                renderGroups();
+            } else {
+                parallelHeats = [];
+                list.classList.remove('show');
+                grid.style.display = '';
+            }
+        }
+
+        function renderGroups() {
+            const list = document.getElementById('groupList');
+            if (!parallelMode) return;
+            if (parallelHeats.length === 0) {
+                list.innerHTML = '<div class="grow"><div class="gleft"><div class="gname">No group started</div></div></div>';
+                return;
+            }
+            let view = parallelHeats;
+            if (parallelHeats.length > PARALLEL_MAX_ROWS) {
+                view = [];
+                for (let i = 0; i < PARALLEL_MAX_ROWS; i++) {
+                    view.push(parallelHeats[(rotateOffset + i) % parallelHeats.length]);
+                }
+            }
+            list.innerHTML = view.map(h => {
+                const gun = h.gunStartTime ? new Date(h.gunStartTime) : null;
+                const startTxt = gun ? Display.formatClockTime(
+                    h.originalGunStartTime ? new Date(h.originalGunStartTime) : gun).slice(0, 8) : '--';
+                const label = h.groupLabel || ('Group ' + h.heatNumber);
+                return '<div class="grow"><div class="gleft">' +
+                    '<div class="gname">' + escFinish(label) + '</div>' +
+                    '<div class="gstart">Start ' + startTxt + '</div></div>' +
+                    '<div class="gtimer" data-hn="' + h.heatNumber + '">--:--:---</div>' +
+                    '<div class="gcount">' + (h.finishedCount ?? 0) + '/' + (h.expectedCount ?? 0) + '</div></div>';
+            }).join('');
+            tickGroups();
+        }
+
+        function tickGroups() {
+            if (!parallelMode) return;
+            document.getElementById('groupList').querySelectorAll('.gtimer').forEach(el => {
+                const hn = Number(el.getAttribute('data-hn'));
+                const h = parallelHeats.find(x => x.heatNumber === hn);
+                if (!h || !h.gunStartTime) { el.textContent = '--:--:---'; return; }
+                const gun = new Date(h.gunStartTime).getTime();
+                if (h.completedAt) {
+                    el.textContent = formatElapsedColon(Math.max(0, (new Date(h.completedAt).getTime() - gun) / 1000));
+                    el.classList.add('frozen');
+                } else {
+                    el.textContent = formatElapsedColon(Math.max(0, (Date.now() - gun) / 1000));
+                    el.classList.remove('frozen');
+                }
+            });
+        }
+
+        function escFinish(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        setInterval(tickGroups, 100);
+        setInterval(() => {
+            if (parallelMode && parallelHeats.length > PARALLEL_MAX_ROWS) {
+                rotateOffset = (rotateOffset + PARALLEL_MAX_ROWS) % parallelHeats.length;
+                renderGroups();
+            }
+        }, PARALLEL_ROTATE_MS);
 
         // ── Rendering ───────────────────────────────────────────────
         function renderCards() {

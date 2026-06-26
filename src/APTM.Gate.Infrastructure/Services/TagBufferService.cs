@@ -11,15 +11,21 @@ public sealed class TagBufferService : ITagBufferService
 {
     private readonly GateDbContext _db;
     private readonly IEpcFilterProvider _epcFilter;
+    private readonly IGateStatusProvider _statusProvider;
+    private readonly IGateIdentityProvider _identityProvider;
     private readonly ILogger<TagBufferService> _logger;
 
     public TagBufferService(
         GateDbContext db,
         IEpcFilterProvider epcFilter,
+        IGateStatusProvider statusProvider,
+        IGateIdentityProvider identityProvider,
         ILogger<TagBufferService> logger)
     {
         _db = db;
         _epcFilter = epcFilter;
+        _statusProvider = statusProvider;
+        _identityProvider = identityProvider;
         _logger = logger;
     }
 
@@ -72,5 +78,20 @@ public sealed class TagBufferService : ITagBufferService
 
         _db.RawTagBuffers.AddRange(entities);
         await _db.SaveChangesAsync(ct);
+
+        // Auto-activate processing the moment real reads land. A reader gate (Finish/Checkpoint)
+        // shouldn't need a manual "Start Gate" tap before it processes the first candidate who
+        // crosses. Idempotent — SetActive(true) is a no-op when already active. Start gates have
+        // no reader so this never fires for them.
+        if (!_statusProvider.IsActive)
+        {
+            var role = _identityProvider.Current?.Role;
+            if (string.Equals(role, "Finish", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(role, "Checkpoint", StringComparison.OrdinalIgnoreCase))
+            {
+                _statusProvider.SetActive(true);
+                _logger.LogInformation("Auto-activated processing on first tag arrival (role={Role}).", role);
+            }
+        }
     }
 }

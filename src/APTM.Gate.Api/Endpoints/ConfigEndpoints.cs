@@ -1,6 +1,8 @@
+using System.Security.Claims;
 using System.Text.Json;
 using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Core.Models;
+using APTM.Gate.Infrastructure.Entities;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -32,6 +34,98 @@ public static class ConfigEndpoints
         .WithName("ApplyConfig")
         .WithSummary("Apply config package from APTM Main")
         .WithDescription("Receives a full ConfigPackageDto, truncates existing config tables, and inserts the new data. Computes clock offset and fires NOTIFY config_updated.");
+
+        // Remove the current test from THIS gate (any role — unlike /gate/race-data/clear
+        // which is reader-only, so a Start gate can clear too). Wipes both the per-race
+        // output AND the test/config identity (test name, candidates, events…) so the
+        // display returns to an idle "no test loaded" state. Provisioning is preserved:
+        // gate_identity (role), accepted_tokens (auth), reader_config and epc_filters are
+        // NOT touched — the gate stays ready for the next test's config push.
+        group.MapPost("/test/clear", async (
+            ClearTestRequest request,
+            HttpContext httpContext,
+            GateDbContext db,
+            IConfiguration config,
+            CancellationToken ct) =>
+        {
+            // Safety: refuse if race output hasn't been pulled to Main yet, unless forced.
+            // On a Start gate there is no local race output, so AllPulled is trivially true.
+            var status = await RaceDataEndpoints.ComputeStatusAsync(db, ct);
+
+            if (request.ExpectedMaxEventId.HasValue
+                && status.MaxEventId > request.ExpectedMaxEventId.Value)
+            {
+                return Results.Conflict(new
+                {
+                    error = "More events arrived since the status check. Re-check status before clearing.",
+                    expectedMaxEventId = request.ExpectedMaxEventId.Value,
+                    actualMaxEventId = status.MaxEventId,
+                    status
+                });
+            }
+
+            if (!request.Force && !status.AllPulled)
+            {
+                return Results.Conflict(new
+                {
+                    error = "Race data has not been fully pulled. Pull from each device first or pass force=true.",
+                    status
+                });
+            }
+
+            // One TRUNCATE for the whole test footprint:
+            //   per-race output : processed_events, raw_tag_buffer, race_start_times,
+            //                     received_sync_data, sync_log, heat_completions
+            //   test identity   : gate_config (test name), candidates, tag_assignments,
+            //                     test_events, checkpoint_config, scoring_statuses,
+            //                     scoring_types, operator_group (+ FK cascade to its children)
+            // RESTART IDENTITY resets the BIGSERIAL high-water marks back to 0.
+            await db.Database.ExecuteSqlRawAsync(
+                "TRUNCATE TABLE processed_events, raw_tag_buffer, race_start_times, " +
+                "received_sync_data, sync_log, heat_completions, " +
+                "gate_config, candidates, tag_assignments, test_events, checkpoint_config, " +
+                "scoring_statuses, scoring_types, operator_group " +
+                "RESTART IDENTITY CASCADE", ct);
+
+            // Audit marker (PullerDeviceCode prefix keeps it out of the regular pull history).
+            var triggeredBy = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown";
+            db.SyncLogs.Add(new SyncLogEntry
+            {
+                Id = Guid.NewGuid(),
+                PullerDeviceId = Guid.Empty,
+                PullerDeviceCode = $"TESTCLEAR:{triggeredBy}{(request.Force ? ":FORCE" : "")}",
+                LastProcessedEventId = status.MaxEventId,
+                LastReceivedSyncId = null,
+                PulledAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync(ct);
+
+            // Best-effort NOTIFY so the local display drops to its idle state immediately.
+            try
+            {
+                var connStr = config.GetConnectionString("GateDb");
+                await using var conn = new NpgsqlConnection(connStr);
+                await conn.OpenAsync(ct);
+                var payload = JsonSerializer.Serialize(new { testCleared = true });
+                await using var cmd = new NpgsqlCommand($"NOTIFY config_updated, '{payload}'", conn);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            catch { /* display refresh is best-effort */ }
+
+            return Results.Ok(new
+            {
+                cleared = true,
+                forced = request.Force,
+                triggeredBy
+            });
+        })
+        .WithName("ClearTest")
+        .WithSummary("Remove the current test from this gate (test name, attendance, race data)")
+        .WithDescription(
+            "Wipes the per-race output AND the test/config identity so the display returns to idle. " +
+            "Defensive default: returns 409 if race data hasn't been fully pulled — pass force=true to override. " +
+            "Provisioning (gate_identity, accepted_tokens, reader_config, epc_filters) is preserved. " +
+            "Allowed for any role, so Start gates can be cleared too.");
 
         group.MapGet("/status", async (ISyncHubService syncHub, CancellationToken ct) =>
         {
@@ -201,3 +295,4 @@ public static class ConfigEndpoints
 
 public record StatusRequest(string Status);
 public record DeviceCodeRequest(string DeviceCode);
+public sealed record ClearTestRequest(bool Force = false, long? ExpectedMaxEventId = null);

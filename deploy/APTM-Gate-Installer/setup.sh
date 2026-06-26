@@ -363,6 +363,14 @@ xset s off -dpms 2>/dev/null || true
 
 ok "Sleep, suspend, hibernate disabled (logind changes apply after reboot)"
 
+# Clock: fixed local timezone + NTP off. These gates run fully offline, so
+# systemd-timesyncd can never reach a time server and would only fight the field
+# app's manual time-set. Pin the zone to India time and disable NTP so a pushed
+# clock sticks. The field app's POST /gate/time sets the actual time later.
+timedatectl set-timezone Asia/Kolkata 2>/dev/null || true
+timedatectl set-ntp false 2>/dev/null || true
+ok "Timezone set to Asia/Kolkata; NTP disabled (field app sets the clock)"
+
 # â”€â”€ Step 7: Static IP on the router LAN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Topology: a dedicated router is the access point. This NUC and its UHF reader
 # are both wired to that router on one subnet, each with a static IP. The Field
@@ -497,16 +505,17 @@ info "[10/11] Display browser setup..."
 
 # Display is derived from the role chosen in Step 5: Start/Finish get a kiosk,
 # Checkpoint is headless.
+# Start/Finish get a kiosk; Checkpoint is headless. The page is chosen by the
+# backend from the gate's role (GET / â†’ led-start-display / finish-mini), so the
+# kiosk opens the ROOT url and always follows the provisioned role â€” no page name
+# baked in here, and a later role change is honoured on the next reload.
 DISPLAY_ENABLED="n"
-DISPLAY_PAGE=""
 case "$ROLE" in
-    Start)  DISPLAY_PAGE="start-display.html" ;;
-    Finish) DISPLAY_PAGE="finish-display.html" ;;
+    Start|Finish) DISPLAY_ENABLED="y" ;;
 esac
 
-if [ -n "$DISPLAY_PAGE" ]; then
-    DISPLAY_ENABLED="y"
-    DISPLAY_URL="http://localhost:$KESTREL_PORT/$DISPLAY_PAGE"
+if [ "$DISPLAY_ENABLED" = "y" ]; then
+    DISPLAY_URL="http://localhost:$KESTREL_PORT/"
 
     # Install a browser if not present
     # On Ubuntu 22.04+, chromium-browser is a snap transitional package.
@@ -662,8 +671,8 @@ echo -e "  Role       : $ROLE${CHECKPOINT_SEQUENCE:+ (seq $CHECKPOINT_SEQUENCE)}
 echo -e "  API        : http://$DISPLAY_IP:$KESTREL_PORT"
 echo -e "  Swagger    : http://$DISPLAY_IP:$KESTREL_PORT/swagger"
 echo -e "  Health     : http://$DISPLAY_IP:$KESTREL_PORT/gate/health"
-if [ -n "$DISPLAY_PAGE" ]; then
-echo -e "  Display    : http://$DISPLAY_IP:$KESTREL_PORT/$DISPLAY_PAGE"
+if [ "$DISPLAY_ENABLED" = "y" ]; then
+echo -e "  Display    : http://$DISPLAY_IP:$KESTREL_PORT/  (role-resolved by gate)"
 fi
 echo -e "  Install Dir: $INSTALL_DIR"
 echo -e "  Database   : $DB_NAME (PostgreSQL)"
@@ -679,7 +688,7 @@ echo -e "  ${YELLOW}System hardening:${NC}"
 echo -e "    Sleep/suspend/hibernate: ${GREEN}DISABLED${NC}"
 echo -e "    Health check cron      : disabled (enable after verifying)"
 if [[ "$DISPLAY_ENABLED" =~ ^[Yy]$ ]]; then
-echo -e "    Browser kiosk          : $DISPLAY_PAGE (auto-open on boot)"
+echo -e "    Browser kiosk          : role display at / (auto-open on boot)"
 else
 echo -e "    Browser kiosk          : not configured (headless)"
 fi

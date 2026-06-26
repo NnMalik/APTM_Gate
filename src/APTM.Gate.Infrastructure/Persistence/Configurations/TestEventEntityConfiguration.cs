@@ -16,6 +16,7 @@ public class TestEventEntityConfiguration : IEntityTypeConfiguration<TestEventEn
         builder.Property(x => x.EventType).HasColumnName("event_type").HasMaxLength(20).IsRequired();
         builder.Property(x => x.Sequence).HasColumnName("sequence").IsRequired();
         builder.Property(x => x.ScoringTypeId).HasColumnName("scoring_type_id");
+        builder.Property(x => x.DisplayMode).HasColumnName("display_mode").HasMaxLength(20);
         builder.HasOne(x => x.ScoringType).WithMany().HasForeignKey(x => x.ScoringTypeId);
     }
 }

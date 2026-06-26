@@ -137,7 +137,7 @@ public static class RaceDataEndpoints
             "accepted_tokens, reader_config) are NOT touched.");
     }
 
-    private static async Task<RaceDataStatusResponse> ComputeStatusAsync(GateDbContext db, CancellationToken ct)
+    internal static async Task<RaceDataStatusResponse> ComputeStatusAsync(GateDbContext db, CancellationToken ct)
     {
         var processedEventCount = await db.ProcessedEvents.CountAsync(ct);
         var rawRowCount = await db.RawTagBuffers.CountAsync(ct);

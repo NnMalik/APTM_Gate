@@ -162,7 +162,8 @@ public sealed class GateConfigService : IGateConfigService
                     EventName = e.EventName,
                     EventType = e.EventType,
                     Sequence = e.Sequence,
-                    ScoringTypeId = e.ScoringTypeId
+                    ScoringTypeId = e.ScoringTypeId,
+                    DisplayMode = e.DisplayMode
                 });
             }
 

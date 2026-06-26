@@ -81,6 +81,20 @@ public static class ActiveEventEndpoints
                 });
             }
 
+            // Block switching events while any heat is still running. A live heat (a race start
+            // with no completion) is mid-measurement; flipping the active event would strand its
+            // finishes against the wrong event. The operator must finish or force-close all heats
+            // first. (Parallel events can have several heats live at once.)
+            var heatActive = await db.RaceStartTimes
+                .AnyAsync(rs => !db.HeatCompletions.Any(hc => hc.HeatId == rs.HeatId), ct);
+            if (heatActive)
+            {
+                return Results.Conflict(new
+                {
+                    error = "A heat is still running. Finish or close every heat before switching events."
+                });
+            }
+
             // Validate the requested event exists in this gate's loaded test_events. Catches
             // the "operator typed in an event id from a different test" case.
             var testEvent = await db.TestEvents

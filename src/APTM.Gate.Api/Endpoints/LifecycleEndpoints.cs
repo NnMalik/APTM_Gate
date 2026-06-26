@@ -157,6 +157,45 @@ public static class LifecycleEndpoints
             "stray reads. Returns 409 if unpulled reads remain (processed, pending raw, or " +
             "in-memory) unless ?force=true. Irreversible remotely — the machine must be " +
             "physically powered back on. Can be disabled per gate via Gate:AllowRemotePowerOff.");
+
+        // Service restart lives OUTSIDE RequireProvisioned: it's the recovery step run right AFTER
+        // first-time provisioning so the readers/workers (which read their role only at startup)
+        // come online — at which point the gate IS provisioned, but we don't want the guard to be
+        // the thing standing between the operator and a working gate. Auth still required.
+        var restartGroup = app.MapGroup("/gate")
+            .RequireAuthorization()
+            .WithTags("Lifecycle");
+
+        restartGroup.MapPost("/restart", (
+            IGateStatusProvider statusProvider,
+            ISystemControlService systemControl,
+            ILogger<Program> logger) =>
+        {
+            // Unlike power-off, a restart comes straight back, so there's no stranded-data guard:
+            // the buffer survives in Postgres and the workers resume on boot. Stop claiming new
+            // batches, ack, then restart after the 200 has flushed.
+            statusProvider.SetActive(false);
+            logger.LogWarning("Service restart requested via /gate/restart — the gate process will bounce.");
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(1000); // let the HTTP 200 reach the tablet before we go down
+                await systemControl.RestartServiceAsync(CancellationToken.None);
+            }, CancellationToken.None);
+
+            return Results.Ok(new
+            {
+                status = "restarting",
+                message = "The gate service is restarting. It will be back in a few seconds — reconnect then."
+            });
+        })
+        .WithName("RestartGateService")
+        .WithSummary("Restart the gate service process")
+        .WithDescription(
+            "Restarts the gate service at the OS level via the configured command " +
+            "(Gate:RestartCommand, default schedules 'systemctl restart aptm-gate' via systemd-run). " +
+            "Used after first-time provisioning so the readers/workers register their newly-set role. " +
+            "The service comes back automatically in a few seconds; data in Postgres is preserved.");
     }
 
     /// <summary>

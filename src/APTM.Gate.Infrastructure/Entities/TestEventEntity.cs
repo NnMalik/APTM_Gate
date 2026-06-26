@@ -9,5 +9,9 @@ public class TestEventEntity
     public int Sequence { get; set; }
     public int? ScoringTypeId { get; set; }
 
+    /// <summary>"SPRINT" | "PARALLEL" — how the display runs this event's heats. From config
+    /// (Main already resolved the per-event flag / type default). Null on legacy gate data.</summary>
+    public string? DisplayMode { get; set; }
+
     public ScoringTypeEntity? ScoringType { get; set; }
 }

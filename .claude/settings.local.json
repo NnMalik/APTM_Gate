@@ -88,7 +88,28 @@
       "Bash(grep -v \"//\\\\|sealed class\")",
       "Bash(grep -n \"^\\\\s*//\" DependencyInjection.cs)",
       "Bash(cd /c/Users/DeLL/source/repos/APTM_FIELD && find . -type f -name \"*.kt\" -o -name \"*.java\" -o -name \"*.xml\" | head -20)",
-      "Bash(xargs basename -a)"
+      "Bash(xargs basename -a)",
+      "Bash(npx tsc *)",
+      "Bash(unzip -l app/libs/nlscan_sdk_master_eng_v4.5.jar)",
+      "Bash(unzip -l 'C:\\\\Users\\\\DeLL\\\\OneDrive\\\\Desktop\\\\sdk uhf\\\\sdkzkrfid407\\\\english\\\\SDK\\\\android\\\\CReader_Uhf.jar')",
+      "Bash(cd 'C:\\\\Users\\\\DeLL\\\\OneDrive\\\\Desktop\\\\sdk uhf'; echo \"=== sdkzkrfid407 tree \\(top levels\\) ===\"; find sdkzkrfid407 -maxdepth 3 -type d 2>/dev/null | head -50; echo; echo \"=== any demo/apk/sample ===\"; find sdkzkrfid407 -iname \"*.apk\" -o -iname \"*demo*\" -o -iname \"*sample*\" 2>/dev/null | head -20)",
+      "Bash(unzip -l CReader_Uhf.jar)",
+      "Bash(echo \"=== search for racetracking source/apk ===\"; find /c/Users/DeLL -iname \"*racetrack*\" 2>/dev/null | head -20; echo \"--- by package dir ---\"; find /c/Users/DeLL -type d -ipath \"*racetracking*\" 2>/dev/null | head; echo \"--- any apk on Desktop/Downloads ---\"; find /c/Users/DeLL/Desktop /c/Users/DeLL/Downloads /c/Users/DeLL/OneDrive/Desktop /c/Users/DeLL/OneDrive/Downloads -iname \"*.apk\" 2>/dev/null | head -20)",
+      "Bash(unzip -oq /c/Users/DeLL/Downloads/APTM_1.apk \"lib/arm64-v8a/*\")",
+      "Bash(grep -aiE \"/dev/tty[a-z0-9]+|ttyS[0-9]|ttyHSL|ttyMT|/dev/[a-z0-9_]+|[0-9]{4,6}\\\\s*bps|baud\")",
+      "Bash(awk '/boolean setReadWritePower|private.*setPower\\\\\\(/{f=1} f{print} f&&/^    }/{exit}' manager/MyUhfManager.java)",
+      "Bash(/c/Users/DeLL/AppData/Local/Android/Sdk/build-tools/36.1.0/dexdump.exe -d classes.dex)",
+      "Bash(grep -rnA 8 \"data class GateCardInfo\" app/src/main/java)",
+      "Bash(grep -v \"//\")",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'vite' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; \"stopped vite if running\")",
+      "Bash(rm -f /c/Users/DeLL/source/repos/5_MTR_Shuttle/5_MTR_Shuttle_Web/.claude/launch.json; echo removed nested)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls store *)",
+      "Bash(ls phases *)",
+      "Bash(grep -E \"\\\\.\\(kt|java\\)$\")",
+      "Bash(grep -E \"\\\\.\\(cs|csproj\\)$\")",
+      "Bash(node -e \"const s=require\\('./package.json'\\).scripts; console.log\\(JSON.stringify\\(s,null,2\\)\\)\")",
+      "PowerShell(dotnet build \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\APTM.Gate.slnx\" --nologo -v q 2>&1)"
     ]
   }
 }

@@ -361,14 +361,12 @@ Write-Step 10 $TOTAL_STEPS "Browser kiosk setup (optional)..."
 
 $displayChoice = Read-Host "       Create display kiosk shortcut on Desktop? (start/finish/skip) [skip]"
 if ($displayChoice -and $displayChoice -ne "skip") {
-    $displayPage = switch ($displayChoice.ToLower()) {
-        "start"  { "start-display.html" }
-        "finish" { "finish-display.html" }
-        default  { $null }
-    }
+    # The page is chosen by the backend from the gate's role (GET / ->
+    # led-start-display / finish-mini); the kiosk just opens the root URL.
+    $isDisplay = $displayChoice.ToLower() -in @("start", "finish")
 
-    if ($displayPage) {
-        $displayUrl = "http://localhost:$KestrelPort/$displayPage"
+    if ($isDisplay) {
+        $displayUrl = "http://localhost:$KestrelPort/"
         $desktopPath = [Environment]::GetFolderPath("Desktop")
         $shortcutPath = Join-Path $desktopPath "APTM Gate Display.lnk"
 
@@ -415,8 +413,7 @@ Write-Host @"
   API URL    : http://localhost:$KestrelPort
   Swagger    : http://localhost:$KestrelPort/swagger
   Health     : http://localhost:$KestrelPort/gate/health
-  Start      : http://localhost:$KestrelPort/start-display.html
-  Finish     : http://localhost:$KestrelPort/finish-display.html
+  Display    : http://localhost:$KestrelPort/  (role-resolved: led-start-display / finish-mini)
 
   Manage service:
     sc.exe query $ServiceName

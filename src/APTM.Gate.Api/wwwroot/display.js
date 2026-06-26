@@ -90,12 +90,18 @@ const Display = (() => {
             onStartReadsLoaded(data.startReads);
         }
 
-        // Active heat — or clear if no heat
+        // Active heat — or clear if no heat. (SPRINT mode only; in PARALLEL mode the page
+        // renders its own per-group list from data.activeHeats and the single-heat elements
+        // are unused.)
         if (data.activeHeat) {
             applyHeat(data.activeHeat);
         } else {
             clearHeat();
         }
+
+        // Full-payload hook — pages use this to render PARALLEL mode (data.displayMode,
+        // data.activeHeats). Called every load/refresh so per-group rows stay current.
+        if (typeof onDisplayData === 'function') onDisplayData(data);
 
         // Derive event status
         updateEventStatus(data);
