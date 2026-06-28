@@ -53,12 +53,6 @@ public static class DisplayEndpoints
             var activeEventId = gateConfig.ActiveEventId;
             var totalCandidates = await db.Candidates.CountAsync(ct);
 
-            // Total groups/batches that have started (distinct heats received via race_start push)
-            var totalGroups = await db.RaceStartTimes
-                .Select(r => r.HeatNumber)
-                .Distinct()
-                .CountAsync(ct);
-
             // Live heats = race starts not cancelled, scoped to the active event. A PARALLEL
             // event (e.g. cross-country) can have several heats live at once, each started by a
             // different HHT; a SPRINT event (e.g. 100m) has one at a time. Cancelled heats are
@@ -74,6 +68,12 @@ public static class DisplayEndpoints
                          && (r.EventId == activeEventId || r.EventId == null))
                 .OrderByDescending(r => r.ReceivedAt)
                 .ToListAsync(ct);
+
+            // Total groups/batches = distinct live heats for the active event. Keyed by
+            // HeatId (one row per heat), so two HHTs that each number their heats from 1
+            // don't collapse together, cancelled heats are excluded, and the count agrees
+            // with the per-group rows and the finish display.
+            var totalGroups = liveStarts.Count;
 
             // Group-name lookup for per-group row labels (falls back to "Group N").
             var groupNames = await db.OperatorGroups
@@ -109,7 +109,7 @@ public static class DisplayEndpoints
                         .Where(pe => pe.EventType == "finish"
                                   && pe.IsFirstRead
                                   && !pe.Voided
-                                  && pe.HeatNumber == rs.HeatNumber
+                                  && pe.HeatId == rs.HeatId
                                   && pe.CandidateId != null
                                   && candidateIds.Contains(pe.CandidateId.Value))
                         .Select(pe => pe.CandidateId)
@@ -128,6 +128,10 @@ public static class DisplayEndpoints
                     HeatNumber = rs.HeatNumber,
                     GroupId = rs.GroupId,
                     GroupLabel = label,
+                    Abbrev = Abbreviate(
+                        rs.GroupId.HasValue ? groupNames.GetValueOrDefault(rs.GroupId.Value) : null,
+                        rs.SourceDeviceCode, rs.HeatNumber),
+                    SourceDeviceCode = rs.SourceDeviceCode,
                     HasStartTime = true,
                     GunStartTime = rs.GunStartTime,
                     OriginalGunStartTime = rs.OriginalGunStartTime,
@@ -135,7 +139,10 @@ public static class DisplayEndpoints
                     ExpectedCount = candidateIds.Length,
                     FinishedCount = completion?.FinishedCount ?? finishedCount,
                     CompletedAt = completion?.CompletedAt,
-                    ClosureReason = completion?.ClosureReason
+                    ClosureReason = completion?.ClosureReason,
+                    // Authoritative finish-gate heat time, when known (relayed to the start gate).
+                    // The start LED freezes on this so both displays show the same total time.
+                    CompletedDurationSeconds = completion?.DurationSeconds
                 });
             }
 
@@ -270,5 +277,41 @@ public static class DisplayEndpoints
         .WithName("GetDisplayData")
         .WithSummary("Get full display state")
         .WithDescription("Returns gate config, active heat, finish reads, and attendance data for display initialization.");
+    }
+
+    private static readonly HashSet<string> AbbrevFiller =
+        new(StringComparer.OrdinalIgnoreCase) { "group", "batch", "heat", "grp", "the", "of", "team" };
+
+    /// <summary>
+    /// Derive a short, uppercased group code for the per-group display label ("H{n} · {code}").
+    /// Multi-word names become initials ("Red Bravo" → "RB"); a single significant word becomes its
+    /// first three letters ("Group Alpha" → "ALP", after dropping the filler word "Group"). When no
+    /// group name resolves, falls back to the source HHT code (e.g. "HHT-02") so two HHTs that each
+    /// number their heats from 1 stay distinguishable; failing that, "G{heatNumber}".
+    /// </summary>
+    private static string Abbreviate(string? groupName, string? deviceCode, int heatNumber)
+    {
+        if (string.IsNullOrWhiteSpace(groupName))
+            return !string.IsNullOrWhiteSpace(deviceCode)
+                ? deviceCode.Trim().ToUpperInvariant()
+                : "G" + heatNumber;
+
+        var words = groupName
+            .Split([' ', '-', '_', '/', '.'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(w => w.Any(char.IsLetter) && !AbbrevFiller.Contains(w))
+            .ToList();
+
+        // Name was only filler/numbers (e.g. "Group 2") — fall back to the first letters of the raw name.
+        if (words.Count == 0)
+        {
+            var letters = new string([.. groupName.Where(char.IsLetterOrDigit)]);
+            return (letters.Length == 0 ? "G" + heatNumber : letters[..Math.Min(3, letters.Length)]).ToUpperInvariant();
+        }
+
+        string abbr = words.Count >= 2
+            ? new string([.. words.Take(4).Select(w => w[0])])      // initials: "Red Bravo" → "RB"
+            : words[0][..Math.Min(3, words[0].Length)];             // first 3:  "Alpha"     → "ALP"
+
+        return abbr.ToUpperInvariant();
     }
 }

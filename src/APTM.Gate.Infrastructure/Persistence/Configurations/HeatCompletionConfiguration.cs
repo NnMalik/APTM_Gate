@@ -34,6 +34,9 @@ public class HeatCompletionConfiguration : IEntityTypeConfiguration<HeatCompleti
             .HasColumnName("source_device_code")
             .HasMaxLength(50)
             .IsRequired();
+        // Authoritative finish-gate heat time; null on legacy rows (additive). Replicated to the
+        // start gate so both displays freeze on an identical value.
+        builder.Property(x => x.DurationSeconds).HasColumnName("duration_seconds");
         builder.Property(x => x.ReceivedAt).HasColumnName("received_at").IsRequired();
     }
 }

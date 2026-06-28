@@ -109,7 +109,14 @@
       "Bash(grep -E \"\\\\.\\(kt|java\\)$\")",
       "Bash(grep -E \"\\\\.\\(cs|csproj\\)$\")",
       "Bash(node -e \"const s=require\\('./package.json'\\).scripts; console.log\\(JSON.stringify\\(s,null,2\\)\\)\")",
-      "PowerShell(dotnet build \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\APTM.Gate.slnx\" --nologo -v q 2>&1)"
+      "PowerShell(dotnet build \"C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_GATE\\\\APTM.Gate.slnx\" --nologo -v q 2>&1)",
+      "Bash(xargs cat)",
+      "Bash(awk '/data class ConfigEventDto/,/\\\\\\)/' app/src/main/java/com/aptm/field/data/remote/dto/ConfigPackageDto.kt)",
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget",
+      "Bash(awk '/function updateStats/,/^        }/' src/APTM.Gate.Api/wwwroot/finish-mini.html)",
+      "Bash(grep -nB2 \"fun insertHeatCandidate\" app/src/main/java/com/aptm/hht/data/local/dao/RaceDao.kt)",
+      "Bash(./gradlew compileDebugKotlin --console=plain -q)"
     ]
   }
 }

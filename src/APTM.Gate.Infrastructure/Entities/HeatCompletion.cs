@@ -32,6 +32,14 @@ public class HeatCompletion
     /// <summary>"auto" | "force_close" | "timeout" (future).</summary>
     public string ClosureReason { get; set; } = "auto";
 
+    /// <summary>
+    /// Authoritative total heat time in seconds (CompletedAt − adjusted gun start), computed at
+    /// the finish gate. Replicated to the start gate so both LED displays freeze on the SAME value
+    /// instead of each recomputing against its own gun-time clock domain. Null on legacy rows or
+    /// when the gun time wasn't available to compute it.
+    /// </summary>
+    public double? DurationSeconds { get; set; }
+
     /// <summary>Device code of the gate that computed (or received) this row.</summary>
     public string SourceDeviceCode { get; set; } = default!;
 

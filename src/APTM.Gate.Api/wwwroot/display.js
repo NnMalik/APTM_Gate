@@ -8,11 +8,15 @@ const Display = (() => {
     // ── State ───────────────────────────────────────────────────────────────
     const state = {
         gateRole: 'unconfigured',
+        parallelMode: false,
         gunStartTime: null,
         // When set, the heat is over and the timer freezes at (heatCompletedAt - gunStartTime).
         // Cleared on race_start so a new heat starts the timer fresh.
         heatCompletedAt: null,
         heatClosureReason: null,    // 'auto' | 'force_close'
+        // Authoritative total heat time (seconds) from the finish gate, when provided. The start
+        // display freezes on THIS so both LEDs match; null → fall back to (completedAt - gun).
+        heatCompletedDurationSeconds: null,
         timerInterval: null,
         feedCount: 0,
         sseSource: null,
@@ -71,14 +75,14 @@ const Display = (() => {
             procEl.className = 'processing-status ' + (data.isProcessingActive ? 'active' : 'idle');
         }
 
-        // Stats
+        // Stats. Always set (default 0/--) so a cleared "awaiting config" payload — which omits
+        // attendance entirely — resets the counters live instead of leaving stale values until a
+        // manual browser refresh.
         setText('statTotal', data.totalCandidates ?? '--');
         setText('statGroups', data.totalGroups ?? 0);
-        if (data.attendance) {
-            setText('statPresent', data.attendance.totalPresent ?? 0);
-            setText('statAbsent', data.attendance.totalAbsent ?? 0);
-            setText('statNotScanned', data.attendance.totalNotScanned ?? 0);
-        }
+        setText('statPresent', data.attendance?.totalPresent ?? 0);
+        setText('statAbsent', data.attendance?.totalAbsent ?? 0);
+        setText('statNotScanned', data.attendance?.totalNotScanned ?? 0);
 
         // Finish reads (finish display) — always call to clear stale data on config switch
         if (typeof onFinishReadsLoaded === 'function') {
@@ -90,13 +94,27 @@ const Display = (() => {
             onStartReadsLoaded(data.startReads);
         }
 
-        // Active heat — or clear if no heat. (SPRINT mode only; in PARALLEL mode the page
-        // renders its own per-group list from data.activeHeats and the single-heat elements
-        // are unused.)
-        if (data.activeHeat) {
-            applyHeat(data.activeHeat);
-        } else {
-            clearHeat();
+        // In PARALLEL mode the page owns the #heatTimer element (one aggregate top timer driven
+        // from data.activeHeats). display.js must NOT also drive it from the single most-recent
+        // heat, or the two writers fight every 50ms and the timer flickers — especially when a
+        // new heat starts. Track the mode so the SPRINT single-heat timer logic stays dormant.
+        state.parallelMode = (data.displayMode || 'SPRINT').toUpperCase() === 'PARALLEL';
+
+        // Active heat — or clear if no heat. SPRINT only; PARALLEL renders its own per-group list.
+        if (!state.parallelMode) {
+            if (data.activeHeat) {
+                applyHeat(data.activeHeat);
+            } else {
+                clearHeat();
+            }
+        } else if (state.timerInterval) {
+            // Belt-and-suspenders: if the SPRINT single-heat timer was ever started (e.g. a
+            // race_start that arrived before the first display-data set the mode), hard-stop it
+            // here. Guarding new starts isn't enough — a still-running interval keeps writing
+            // #heatTimer from the most-recent heat's gun while the page writes it from the
+            // earliest gun, and the two diverge the moment a 2nd heat starts → flicker.
+            clearInterval(state.timerInterval);
+            state.timerInterval = null;
         }
 
         // Full-payload hook — pages use this to render PARALLEL mode (data.displayMode,
@@ -112,6 +130,9 @@ const Display = (() => {
         state.gunStartTime = heat.gunStartTime ? new Date(heat.gunStartTime) : null;
         state.heatCompletedAt = heat.completedAt ? new Date(heat.completedAt) : null;
         state.heatClosureReason = heat.closureReason || null;
+        state.heatCompletedDurationSeconds = (heat.completedDurationSeconds != null)
+            ? heat.completedDurationSeconds
+            : null;
 
         setText('heatNumber', heat.heatNumber ?? '--');
         setText('statHeat', heat.heatNumber ?? '--');
@@ -150,7 +171,11 @@ const Display = (() => {
         if (!state.gunStartTime || !state.heatCompletedAt) return;
         const el = document.getElementById('heatTimer');
         if (!el) return;
-        const elapsed = (state.heatCompletedAt.getTime() - state.gunStartTime.getTime()) / 1000;
+        // Prefer the authoritative finish-gate duration (start display) so both LEDs match;
+        // fall back to the local (completedAt - gun) computation when it isn't provided.
+        const elapsed = (state.heatCompletedDurationSeconds != null)
+            ? state.heatCompletedDurationSeconds
+            : (state.heatCompletedAt.getTime() - state.gunStartTime.getTime()) / 1000;
         el.textContent = formatElapsed(Math.max(0, elapsed));
         el.classList.add('frozen');
         if (state.heatClosureReason === 'force_close') {
@@ -167,6 +192,7 @@ const Display = (() => {
         state.gunStartTime = null;
         state.heatCompletedAt = null;
         state.heatClosureReason = null;
+        state.heatCompletedDurationSeconds = null;
 
         const timerCard = document.getElementById('heatCard');
         if (timerCard) timerCard.style.display = 'none';
@@ -268,25 +294,30 @@ const Display = (() => {
 
         src.addEventListener('race_start', (e) => {
             const d = JSON.parse(e.data);
-            // Timer uses adjusted gun time (Gate's clock domain)
-            state.gunStartTime = new Date(d.gun_start_time);
-            // New heat starts a fresh timer — clear any prior completion freeze.
-            state.heatCompletedAt = null;
-            state.heatClosureReason = null;
-            const timerEl = document.getElementById('heatTimer');
-            if (timerEl) timerEl.classList.remove('frozen', 'force-close');
+            // SPRINT only drives the single top timer here. In PARALLEL the page owns it from
+            // data.activeHeats (multiple heats), so skip the single-heat manipulation entirely.
+            if (!state.parallelMode) {
+                // Timer uses adjusted gun time (Gate's clock domain)
+                state.gunStartTime = new Date(d.gun_start_time);
+                // New heat starts a fresh timer — clear any prior completion freeze.
+                state.heatCompletedAt = null;
+                state.heatClosureReason = null;
+                state.heatCompletedDurationSeconds = null;
+                const timerEl = document.getElementById('heatTimer');
+                if (timerEl) timerEl.classList.remove('frozen', 'force-close');
 
-            // Label shows original HHT gun time (what the starter saw)
-            const displayTime = d.original_gun_start_time
-                ? new Date(d.original_gun_start_time)
-                : state.gunStartTime;
-            setText('heatNumber', d.heat_number ?? '--');
-            setText('gunStartTime', formatClockTime(displayTime));
+                // Label shows original HHT gun time (what the starter saw)
+                const displayTime = d.original_gun_start_time
+                    ? new Date(d.original_gun_start_time)
+                    : state.gunStartTime;
+                setText('heatNumber', d.heat_number ?? '--');
+                setText('gunStartTime', formatClockTime(displayTime));
 
-            const timerCard = document.getElementById('heatCard');
-            if (timerCard) timerCard.style.display = 'block';
-            setLiveIndicator(true);
-            startHeatTimer();
+                const timerCard = document.getElementById('heatCard');
+                if (timerCard) timerCard.style.display = 'block';
+                setLiveIndicator(true);
+                startHeatTimer();
+            }
             addFeed('start', `Group ${d.heat_number} — Gun fired`);
 
             if (typeof onRaceStart === 'function') onRaceStart(d);
@@ -294,13 +325,16 @@ const Display = (() => {
 
         src.addEventListener('heat_complete', (e) => {
             const d = JSON.parse(e.data);
-            state.heatCompletedAt = d.completed_at ? new Date(d.completed_at) : new Date();
-            state.heatClosureReason = d.closure_reason || 'auto';
-            renderFrozenTimer();
-            setLiveIndicator(false);
-            const label = state.heatClosureReason === 'force_close' ? 'ended manually' : 'complete';
+            // SPRINT freezes the single top timer; PARALLEL freezes per-group from the reload.
+            if (!state.parallelMode) {
+                state.heatCompletedAt = d.completed_at ? new Date(d.completed_at) : new Date();
+                state.heatClosureReason = d.closure_reason || 'auto';
+                renderFrozenTimer();
+                setLiveIndicator(false);
+                showToast('finish', `Heat ${d.heat_number} ${(d.closure_reason || 'auto') === 'force_close' ? 'ended manually' : 'complete'} (${formatClockTime(state.heatCompletedAt)})`);
+            }
+            const label = (d.closure_reason || 'auto') === 'force_close' ? 'ended manually' : 'complete';
             addFeed('finish', `Heat ${d.heat_number} — ${label}`);
-            showToast('finish', `Heat ${d.heat_number} ${label} (${formatClockTime(state.heatCompletedAt)})`);
             if (typeof onHeatComplete === 'function') onHeatComplete(d);
         });
 

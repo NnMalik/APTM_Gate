@@ -51,6 +51,17 @@ public sealed class ActiveHeatData
     public Guid? GroupId { get; set; }
     /// <summary>Operator-group name when known, else "Group {HeatNumber}". Drives the per-group row label.</summary>
     public string GroupLabel { get; set; } = default!;
+
+    /// <summary>
+    /// Short, uppercased group code derived from <see cref="GroupLabel"/> (e.g. "Group Alpha" → "ALP").
+    /// The per-group display renders "H{HeatNumber} · {Abbrev}" so heats from different HHTs — which
+    /// each number from 1 — stay distinguishable. Falls back to "G{HeatNumber}" when no group is known.
+    /// </summary>
+    public string Abbrev { get; set; } = default!;
+
+    /// <summary>Code of the HHT that started this heat (e.g. "HHT-02"); null on legacy rows. Lets the
+    /// field app show which device ran each heat alongside the operator group.</summary>
+    public string? SourceDeviceCode { get; set; }
     public bool HasStartTime { get; set; }
     public DateTimeOffset? GunStartTime { get; set; }
     public DateTimeOffset? OriginalGunStartTime { get; set; }
@@ -67,6 +78,12 @@ public sealed class ActiveHeatData
 
     /// <summary>"auto" | "force_close" | null. Helps the display label the freeze appropriately.</summary>
     public string? ClosureReason { get; set; }
+
+    /// <summary>
+    /// Authoritative total heat time (seconds) from the finish gate, when known. The start display
+    /// freezes on this so both LEDs show an identical value; null falls back to (CompletedAt − gun).
+    /// </summary>
+    public double? CompletedDurationSeconds { get; set; }
 }
 
 public sealed class HeatCandidateData

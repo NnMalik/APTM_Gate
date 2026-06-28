@@ -74,6 +74,11 @@ public sealed class SyncHubService : ISyncHubService
     private async Task<SyncPushResult> PushInternalAsync(SyncPushPayload payload, CancellationToken ct = default)
     {
 
+        // An HHT race_start that names a different RACE event than the gate's current active one
+        // triggers a one-event-at-a-time auto-switch — evaluated after persistence (end of method),
+        // and only when the current event's heats are all complete.
+        int? autoSwitchToEventId = null;
+
         // If heat_completion, also upsert into heat_completions so the local display can
         // freeze its timer at the same moment the finish gate did. Idempotent — duplicate
         // pushes for the same heat_id are silently dropped (unique index on heat_id).
@@ -98,6 +103,9 @@ public sealed class SyncHubService : ISyncHubService
                         CompletedAt = heatPayload.CompletedAt,
                         ClosureReason = string.IsNullOrWhiteSpace(heatPayload.ClosureReason) ? "auto" : heatPayload.ClosureReason,
                         SourceDeviceCode = heatPayload.SourceDeviceCode,
+                        // Authoritative finish-gate heat time carried in the relay. The start display
+                        // shows this verbatim so both LEDs freeze on an identical value.
+                        DurationSeconds = heatPayload.DurationSeconds,
                         ReceivedAt = DateTimeOffset.UtcNow
                     });
                 }
@@ -285,6 +293,7 @@ public sealed class SyncHubService : ISyncHubService
                         GunStartTime = adjustedGunStart,
                         OriginalGunStartTime = racePayload.GunStartTime,
                         SourceDeviceId = payload.DeviceId,
+                        SourceDeviceCode = payload.DeviceCode,
                         CandidateIds = racePayload.Candidates?
                             .Select(c => c.CandidateId).ToArray() ?? [],
                         SourceClockOffsetMs = (int)racePayload.SourceClockOffsetMs,
@@ -295,6 +304,15 @@ public sealed class SyncHubService : ISyncHubService
                         EventId = (int?)racePayload.EventId ?? raceGateConfig?.ActiveEventId,
                         TestInstanceId = raceGateConfig?.TestInstanceId
                     });
+
+                    // The HHT explicitly named an event that differs from the gate's current one:
+                    // remember it so we can follow the operator to the new event after this heat is
+                    // persisted (only switches if the current event is already finished — below).
+                    var incomingEventId = (int?)racePayload.EventId;
+                    if (incomingEventId is int ev && ev != raceGateConfig?.ActiveEventId)
+                    {
+                        autoSwitchToEventId = ev;
+                    }
                 }
             }
         }
@@ -312,7 +330,64 @@ public sealed class SyncHubService : ISyncHubService
         });
 
         await _db.SaveChangesAsync(ct);
+
+        if (autoSwitchToEventId is int switchTo)
+        {
+            await TryAutoSwitchActiveEventAsync(switchTo, ct);
+        }
+
         return SyncPushResult.Ok(payload.ClientRecordId);
+    }
+
+    /// <summary>
+    /// One-event-at-a-time auto-switch. When an HHT fires a heat for a different RACE event than the
+    /// gate's current active one, follow it — but ONLY once the current event's heats are all
+    /// complete, so a still-running event is never yanked off the display mid-measurement. Otherwise
+    /// the new heat stays recorded but the active event is left unchanged (the operator finishes the
+    /// current event first; the HHT shows a warning at fire time when it can reach the gate). Mirrors
+    /// the validation of POST /gate/active-event and fires the same config_updated NOTIFY.
+    /// </summary>
+    private async Task TryAutoSwitchActiveEventAsync(int incomingEventId, CancellationToken ct)
+    {
+        var gateConfig = await _db.GateConfigs.FirstOrDefaultAsync(g => g.IsActive, ct);
+        if (gateConfig is null || gateConfig.ActiveEventId == incomingEventId)
+        {
+            return;
+        }
+
+        var target = await _db.TestEvents.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.EventId == incomingEventId, ct);
+        if (target is null || !string.Equals(target.EventType, "RACE", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogDebug("Auto-switch skipped: event {EventId} is unknown or not a RACE event.", incomingEventId);
+            return;
+        }
+
+        // One event at a time: don't switch away from an event that still has running heats
+        // (a race start with no completion). The HHT is warned at fire time; this is the backstop.
+        if (gateConfig.ActiveEventId is int current)
+        {
+            var currentEventStillRunning = await _db.RaceStartTimes
+                .AnyAsync(rs => rs.EventId == current
+                             && !_db.HeatCompletions.Any(hc => hc.HeatId == rs.HeatId), ct);
+            if (currentEventStillRunning)
+            {
+                _logger.LogInformation(
+                    "Auto-switch to event {EventId} deferred: current event {Current} still has running heats.",
+                    incomingEventId, current);
+                return;
+            }
+        }
+
+        gateConfig.ActiveEventId = target.EventId;
+        gateConfig.ActiveEventName = target.EventName;
+        await _db.SaveChangesAsync(ct);
+
+        // Refresh the display's title bar without polling (same channel the manual switch uses).
+        var notifyPayload = JsonSerializer.Serialize(new { activeEventId = target.EventId, activeEventName = target.EventName });
+        await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify('config_updated', {notifyPayload})", ct);
+
+        _logger.LogInformation("Auto-switched active event → {EventId} ({Name}) on an HHT race_start.", target.EventId, target.EventName);
     }
 
     public async Task<SyncPullResponse> PullAsync(

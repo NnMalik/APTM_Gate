@@ -31,26 +31,28 @@
             gap: 8px;
         }
 
-        /* ── Connection indicator ── */
-        .conn-row {
+        /* ── Header (test + event name + LIVE badge) ──
+           Green background while the SSE stream is live, grey when reconnecting.
+           Folds the old standalone connection row into the title bar to save
+           vertical space on the small panel. No reader is attached to a start
+           gate, so this only reflects the page↔gate live link. */
+        .header {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 14px;
-            font-weight: 600;
+            padding: 6px 8px;
+            border-radius: 8px;
+            background: #dcfce7;                 /* light green = live */
+            border-left: 4px solid #22c55e;
         }
-        .conn-dot {
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background: #d1d5db;           /* grey when disconnected */
-            flex-shrink: 0;
+        .header.offline {
+            background: #f3f4f6;                 /* grey = reconnecting/offline */
+            border-left-color: #9ca3af;
         }
-        .conn-dot.connected { background: #22c55e; }   /* green when live */
+        .header-text { flex: 1; min-width: 0; }  /* clamp the text, not the badge */
 
-        /* ── Test name ── */
         .test-name {
-            font-size: 20px;
+            font-size: 19px;
             font-weight: 800;
             line-height: 1.1;
             letter-spacing: -0.3px;
@@ -59,6 +61,32 @@
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+        }
+        /* ── Event name (under the test name) ── */
+        .event-name {
+            font-size: 13px;
+            font-weight: 700;
+            color: #374151;
+            line-height: 1.15;
+            margin-top: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .live-badge {
+            flex-shrink: 0;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            color: #15803d;
+            background: #bbf7d0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .header.offline .live-badge {
+            color: #6b7280;
+            background: #e5e7eb;
         }
 
         /* ── Two-up stats (Participant / Present) ── */
@@ -160,20 +188,25 @@
     </style>
 </head>
 <body>
-    <!-- Connection -->
-    <div class="conn-row">
-        <span id="sseDot" class="conn-dot"></span>
-        <span id="sseLabel">Connecting...</span>
+    <!-- Header: test + event name, green when SSE live, LIVE badge on the right -->
+    <div class="header" id="header">
+        <div class="header-text">
+            <div class="test-name" id="testName">--</div>
+            <div class="event-name" id="eventName">--</div>
+        </div>
+        <span class="live-badge" id="liveBadge">LIVE</span>
     </div>
 
-    <!-- Test name -->
-    <div class="test-name" id="testName">--</div>
+    <!-- Connection state is driven by display.js via these hidden elements; the
+         header mirrors them (green/LIVE vs grey/OFFLINE) via a class observer. -->
+    <span id="sseDot" class="conn-dot" style="display:none;"></span>
+    <span id="sseLabel" style="display:none;"></span>
 
     <!-- Participant / Present -->
     <div class="stats-row">
         <div class="stat">
             <div class="stat-value" id="statTotal">--</div>
-            <div class="stat-label">Total Paticiptent</div>
+            <div class="stat-label">Total Participant</div>
         </div>
         <div class="stat">
             <div class="stat-value" id="statPresent">0</div>
@@ -206,7 +239,6 @@
 
     <!-- Hidden elements display.js may touch (kept so setText/setLiveIndicator are harmless no-ops) -->
     <span id="testDate" style="display:none;"></span>
-    <span id="eventName" style="display:none;"></span>
     <span id="clock" style="display:none;"></span>
     <span id="readerStatus" style="display:none;"></span>
     <span id="processingStatus" style="display:none;"></span>
@@ -230,11 +262,37 @@
         });
         cardObserver.observe(heatCard, { attributes: true, attributeFilter: ['style'] });
 
-        // Re-fetch display data when HHT pushes attendance/race_start sync so counts update.
+        // ── Header live/offline mirror ──────────────────────────────────────
+        // display.js toggles #sseDot.connected on SSE open/close. Reflect that onto
+        // the header (green + LIVE vs grey + OFFLINE) so the small panel spends no
+        // vertical space on a dedicated connection row.
+        const sseDot = document.getElementById('sseDot');
+        const headerEl = document.getElementById('header');
+        const liveBadge = document.getElementById('liveBadge');
+        function reflectConnection() {
+            const live = sseDot.classList.contains('connected');
+            headerEl.classList.toggle('offline', !live);
+            liveBadge.textContent = live ? 'LIVE' : 'OFFLINE';
+        }
+        new MutationObserver(reflectConnection).observe(sseDot, { attributes: true, attributeFilter: ['class'] });
+        reflectConnection();
+
+        // Re-fetch display data when HHT pushes attendance/race_start/heat_completion sync so counts
+        // and per-group timers update. heat_completion is the relayed finish-gate completion — a
+        // reload lets the per-group row (PARALLEL) pick up completedAt + the authoritative duration
+        // and freeze. (SPRINT freezes directly via display.js's heat_complete handler.)
         function onSyncData(data) {
-            if (data.data_type === 'attendance' || data.data_type === 'race_start') {
+            if (data.data_type === 'attendance' || data.data_type === 'race_start'
+                || data.data_type === 'heat_completion') {
                 setTimeout(Display.loadDisplayData, 300);
             }
+        }
+
+        // Heat completed (relayed completion fires this on the start gate too). In PARALLEL the
+        // per-group list owns the timers, so reload to freeze the right row on its finish-gate
+        // duration. SPRINT is already handled by display.js's built-in heat_complete handler.
+        function onHeatComplete(data) {
+            if (parallelMode) setTimeout(Display.loadDisplayData, 300);
         }
 
         // race_start arrives via display.js's built-in SSE handler — it already:
@@ -295,10 +353,12 @@
                 const gun = h.gunStartTime ? new Date(h.gunStartTime) : null;
                 const startTxt = gun ? Display.formatClockTime(
                     h.originalGunStartTime ? new Date(h.originalGunStartTime) : gun).slice(0, 8) : '--';
+                // "H{n} · ABBR" — heat numbers repeat across HHTs, so the group code disambiguates.
+                const label = 'H' + h.heatNumber + ' · ' + (h.abbrev || ('G' + h.heatNumber));
                 return '<div class="grp">' +
-                    '<div class="gl"><div class="gn">' + escapeHtmlLocal(h.groupLabel || ('Group ' + h.heatNumber)) + '</div>' +
+                    '<div class="gl"><div class="gn">' + escapeHtmlLocal(label) + '</div>' +
                     '<div class="gs">' + startTxt + '</div></div>' +
-                    '<div class="gt" data-hn="' + h.heatNumber + '">--:--</div></div>';
+                    '<div class="gt" data-hid="' + h.heatId + '">--:--</div></div>';
             }).join('');
             tickGroups();
         }
@@ -308,12 +368,18 @@
             if (!parallelMode) return;
             const list = document.getElementById('groupList');
             list.querySelectorAll('.gt').forEach(el => {
-                const hn = Number(el.getAttribute('data-hn'));
-                const h = parallelHeats.find(x => x.heatNumber === hn);
+                // Key by heatId, NOT heatNumber — heat numbers collide across HHTs (each starts at 1).
+                const id = el.getAttribute('data-hid');
+                const h = parallelHeats.find(x => x.heatId === id);
                 if (!h || !h.gunStartTime) { el.textContent = '--:--'; return; }
                 const gun = new Date(h.gunStartTime).getTime();
                 if (h.completedAt) {
-                    el.textContent = Display.formatElapsed(Math.max(0, (new Date(h.completedAt).getTime() - gun) / 1000));
+                    // Prefer the authoritative finish-gate duration so this matches the finish LED
+                    // exactly; fall back to (completedAt - gun) when it isn't provided.
+                    const elapsed = (h.completedDurationSeconds != null)
+                        ? h.completedDurationSeconds
+                        : (new Date(h.completedAt).getTime() - gun) / 1000;
+                    el.textContent = Display.formatElapsed(Math.max(0, elapsed));
                     el.classList.add('frozen');
                 } else {
                     el.textContent = Display.formatElapsed(Math.max(0, (Date.now() - gun) / 1000));

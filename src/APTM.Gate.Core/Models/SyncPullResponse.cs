@@ -68,4 +68,20 @@ public sealed class HeatCompletionDto
     public DateTimeOffset CompletedAt { get; set; }
     public string ClosureReason { get; set; } = "auto";
     public string SourceDeviceCode { get; set; } = default!;
+
+    /// <summary>Authoritative total heat time (seconds) computed at the finish gate. Carried through
+    /// the relay so the start gate stores it and both LEDs freeze on the same value. Null = unknown.</summary>
+    public double? DurationSeconds { get; set; }
+}
+
+/// <summary>
+/// Response for <c>GET /gate/heat/completions</c> — the lightweight completions feed an HHT polls
+/// from the finish gate to relay heat completions (with authoritative <see cref="HeatCompletionDto.DurationSeconds"/>)
+/// onward to the start gate. <see cref="HighWaterMs"/> is the max <c>received_at</c> of the returned
+/// rows; the poller passes it back as <c>sinceMs</c> next time to fetch only newer completions.
+/// </summary>
+public sealed class HeatCompletionFeedResponse
+{
+    public List<HeatCompletionDto> Completions { get; set; } = [];
+    public long HighWaterMs { get; set; }
 }

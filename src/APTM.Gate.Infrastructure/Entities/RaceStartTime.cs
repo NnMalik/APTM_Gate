@@ -8,6 +8,14 @@ public class RaceStartTime
     public DateTimeOffset GunStartTime { get; set; }
     public DateTimeOffset OriginalGunStartTime { get; set; }
     public Guid SourceDeviceId { get; set; }
+
+    /// <summary>
+    /// Friendly code of the HHT that started this heat (e.g. "HHT-02"), taken from the push
+    /// envelope. Two HHTs each number their heats from 1, so the display falls back to this to
+    /// distinguish concurrent heats when no operator-group name is available. Nullable for legacy
+    /// rows created before this column.
+    /// </summary>
+    public string? SourceDeviceCode { get; set; }
     public Guid[] CandidateIds { get; set; } = [];
     public int SourceClockOffsetMs { get; set; }
     public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;

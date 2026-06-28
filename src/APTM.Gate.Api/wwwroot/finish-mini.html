@@ -112,6 +112,7 @@
             font-variant-numeric: tabular-nums;
             letter-spacing: 1px;
         }
+        .stat-timer.frozen { color: #22c55e; } /* green once stopped (all heats done / heat complete) */
 
         /* ── Card Grid (214px) ──────────────────────────────────── */
         .grid {
@@ -212,7 +213,7 @@
         </div>
         <div class="header-center">
             <div class="test-name" id="testName">--</div>
-            <div class="heat-line">Heat <span id="heatNumber">--</span></div>
+            <div class="heat-line"><span id="eventName"></span>Heat <span id="heatNumber">--</span></div>
         </div>
         <div class="header-right">
             <div class="indicator">
@@ -336,22 +337,39 @@
             completedCount++;
             renderCards();
             updateStats();
+
+            // The top "Completed" counter just moved (above), but each group's X/Y count lives in
+            // the /gate/display-data payload, which is only re-fetched on heat-lifecycle events — so
+            // a mid-heat finish wouldn't tick the per-group bar until the whole group completed.
+            // Refresh it (debounced) on every finish read so the per-group count climbs live too.
+            if (parallelMode) scheduleGroupRefresh();
+        }
+
+        // Coalesce a burst of finishers into ~2 reloads/sec: the first read in a window schedules a
+        // reload; reads within the window ride along; the next read after it reschedules.
+        let groupRefreshTimer = null;
+        function scheduleGroupRefresh() {
+            if (groupRefreshTimer) return;
+            groupRefreshTimer = setTimeout(() => {
+                groupRefreshTimer = null;
+                Display.loadDisplayData();
+            }, 450);
         }
 
         function onRaceStart(data) {
-            // PARALLEL: a new group joining shouldn't wipe the screen — just refresh the list.
-            if (parallelMode) { setTimeout(Display.loadDisplayData, 300); return; }
-            // SPRINT (sequential heats, e.g. 100m): the new heat replaces the previous board.
-            cards.length = 0;
-            seen.clear();
-            completedCount = 0;
-            renderCards();
-            updateStats();
+            // Re-sync from the server on a new heat, in BOTH modes — never wipe the board locally.
+            // SPRINT used to clear cards + completedCount here ("new heat replaces the board"), but a
+            // SPRINT event can be split across HHTs into CONCURRENT heats: the second heat's start
+            // then erased the first heat's finishers, leaving Completed stuck at one heat's count
+            // (e.g. 3/6). display-data.finishReads is event-scoped (every heat), so a reload shows
+            // all finishers and Completed/Remaining reflect the whole event. Live tag_event reads
+            // still accumulate between reloads, so nothing is lost.
+            setTimeout(Display.loadDisplayData, 300);
         }
 
         function onHeatComplete(data) {
-            // PARALLEL: re-pull so the completed group's timer freezes (and its count finalises).
-            if (parallelMode) setTimeout(Display.loadDisplayData, 300);
+            // Re-pull (both modes) so the timer freezes and the counts finalise from the server.
+            setTimeout(Display.loadDisplayData, 300);
         }
 
         function onSyncData(data) {
@@ -369,6 +387,14 @@
         let rotateOffset = 0;
 
         function onDisplayData(data) {
+            // Sync the header stats on every reload — including the SSE-driven reload after a reset,
+            // where the "awaiting config" payload has no attendance. refreshChrome only runs on a
+            // manual page load, so without this Present/Remaining linger until a browser refresh.
+            presentCount = data.attendance ? (data.attendance.totalPresent ?? 0) : 0;
+            Display.setText('statPresent', presentCount);
+            Display.setText('statTotal', data.totalCandidates ?? '--');
+            updateStats();
+
             parallelMode = (data.displayMode || 'SPRINT').toUpperCase() === 'PARALLEL';
             const grid = document.getElementById('cardGrid');
             const list = document.getElementById('groupList');
@@ -403,11 +429,13 @@
                 const gun = h.gunStartTime ? new Date(h.gunStartTime) : null;
                 const startTxt = gun ? Display.formatClockTime(
                     h.originalGunStartTime ? new Date(h.originalGunStartTime) : gun).slice(0, 8) : '--';
-                const label = h.groupLabel || ('Group ' + h.heatNumber);
+                // "H{n} · ABBR" — heat numbers repeat across HHTs, so the group code disambiguates.
+                const abbr = h.abbrev || ('G' + h.heatNumber);
+                const label = 'H' + h.heatNumber + ' · ' + abbr;
                 return '<div class="grow"><div class="gleft">' +
                     '<div class="gname">' + escFinish(label) + '</div>' +
                     '<div class="gstart">Start ' + startTxt + '</div></div>' +
-                    '<div class="gtimer" data-hn="' + h.heatNumber + '">--:--:---</div>' +
+                    '<div class="gtimer" data-hid="' + h.heatId + '">--:--:---</div>' +
                     '<div class="gcount">' + (h.finishedCount ?? 0) + '/' + (h.expectedCount ?? 0) + '</div></div>';
             }).join('');
             tickGroups();
@@ -416,8 +444,10 @@
         function tickGroups() {
             if (!parallelMode) return;
             document.getElementById('groupList').querySelectorAll('.gtimer').forEach(el => {
-                const hn = Number(el.getAttribute('data-hn'));
-                const h = parallelHeats.find(x => x.heatNumber === hn);
+                // Key by heatId, NOT heatNumber: two HHTs each number their heats from 1, so
+                // heatNumber collides and find() would return the first heat for every row.
+                const id = el.getAttribute('data-hid');
+                const h = parallelHeats.find(x => x.heatId === id);
                 if (!h || !h.gunStartTime) { el.textContent = '--:--:---'; return; }
                 const gun = new Date(h.gunStartTime).getTime();
                 if (h.completedAt) {
@@ -505,16 +535,41 @@
             Display.setText('statRemaining', remaining);
         }
 
-        // ── Live big timer (own loop, format MM:SS:mmm) ─────────────
+        // ── Big top timer (own loop, format MM:SS:mmm) ─────────────
+        // It must STOP, not run forever: in PARALLEL it freezes once every live heat has
+        // completed (overall elapsed from the earliest gun start to the last completion); in
+        // SPRINT it freezes when the single heat completes (auto, when the last candidate
+        // passes, or a manual close). Otherwise it ticks live.
         setInterval(() => {
             const el = document.getElementById('heatTimer');
             if (!el) return;
-            if (!Display.state.gunStartTime) {
-                el.textContent = '00:00:000';
+
+            if (parallelMode) {
+                const heats = parallelHeats.filter(h => h.gunStartTime);
+                if (heats.length === 0) { el.textContent = '00:00:000'; el.classList.remove('frozen'); return; }
+                const firstGun = Math.min(...heats.map(h => new Date(h.gunStartTime).getTime()));
+                const allDone = heats.every(h => h.completedAt);
+                if (allDone) {
+                    const lastDone = Math.max(...heats.map(h => new Date(h.completedAt).getTime()));
+                    el.textContent = formatElapsedColon(Math.max(0, (lastDone - firstGun) / 1000));
+                    el.classList.add('frozen');
+                } else {
+                    el.textContent = formatElapsedColon(Math.max(0, (Date.now() - firstGun) / 1000));
+                    el.classList.remove('frozen');
+                }
+                return;
+            }
+
+            if (!Display.state.gunStartTime) { el.textContent = '00:00:000'; el.classList.remove('frozen'); return; }
+            if (Display.state.heatCompletedAt) {
+                const frozen = (Display.state.heatCompletedAt.getTime() - Display.state.gunStartTime.getTime()) / 1000;
+                el.textContent = formatElapsedColon(Math.max(0, frozen));
+                el.classList.add('frozen');
                 return;
             }
             const elapsed = (Date.now() - Display.state.gunStartTime.getTime()) / 1000;
             el.textContent = elapsed < 0 ? '00:00:000' : formatElapsedColon(elapsed);
+            el.classList.remove('frozen');
         }, 50);
 
         // ── Refresh header chrome (date, title, R/G, Total, Present) ──
@@ -532,9 +587,10 @@
                     document.getElementById('hdrDate').textContent = `${da}/${m}/${y}`;
                 }
 
-                // Title — prefer active event, else test instance
-                const title = d.activeEventName || d.testInstanceName || '--';
-                document.getElementById('testName').textContent = title;
+                // Test name on top, the active event (with the heat) on the line below it.
+                document.getElementById('testName').textContent = d.testInstanceName || '--';
+                const evEl = document.getElementById('eventName');
+                if (evEl) evEl.textContent = d.activeEventName ? (d.activeEventName + '  ·  ') : '';
 
                 // R bar (reader connected) and G bar (processing active)
                 document.getElementById('readerBar').classList.toggle('ok', !!d.readerConnected);

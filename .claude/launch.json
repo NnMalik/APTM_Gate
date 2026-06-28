@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "C:/Users/DeLL/source/repos/5_MTR_Shuttle/5_MTR_Shuttle_Web", "run", "dev", "--", "--port", "5173", "--strictPort"],
       "port": 5173
+    },
+    {
+      "name": "gate-wwwroot",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8099", "--directory", "src/APTM.Gate.Api/wwwroot"],
+      "port": 8099
     }
   ]
 }

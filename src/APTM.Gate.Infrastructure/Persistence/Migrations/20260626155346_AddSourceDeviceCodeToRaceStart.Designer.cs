@@ -4,6 +4,7 @@ using System.Text.Json;
 using APTM.Gate.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace APTM.Gate.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(GateDbContext))]
-    partial class GateDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260626155346_AddSourceDeviceCodeToRaceStart")]
+    partial class AddSourceDeviceCodeToRaceStart
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -307,10 +310,6 @@ namespace APTM.Gate.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
-
-                    b.Property<double?>("DurationSeconds")
-                        .HasColumnType("double precision")
-                        .HasColumnName("duration_seconds");
 
                     b.Property<int>("ExpectedCount")
                         .HasColumnType("integer")

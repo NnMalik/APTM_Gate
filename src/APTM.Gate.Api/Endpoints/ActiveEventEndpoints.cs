@@ -53,12 +53,21 @@ public static class ActiveEventEndpoints
                 })
                 .ToListAsync(ct);
 
+            // Whether the CURRENT active event still has running heats (a race start with no
+            // completion). The HHT reads this before firing a heat for a different event: with
+            // "one event at a time", it must warn the operator to finish the current event first.
+            var currentEventHeatsRunning = gateConfig.ActiveEventId is int activeId
+                && await db.RaceStartTimes.AnyAsync(
+                    rs => rs.EventId == activeId
+                        && !db.HeatCompletions.Any(hc => hc.HeatId == rs.HeatId), ct);
+
             return Results.Ok(new
             {
                 testInstanceId = gateConfig.TestInstanceId,
                 testInstanceName = gateConfig.TestInstanceName,
                 activeEventId = gateConfig.ActiveEventId,
                 activeEventName = gateConfig.ActiveEventName,
+                currentEventHeatsRunning,
                 availableEvents
             });
         })
