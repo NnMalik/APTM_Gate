@@ -25,6 +25,14 @@ public interface ISystemControlService
     Task RestartServiceAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// Reboots the whole NUC at the OS level (full OS restart, unlike <see cref="RestartServiceAsync"/>
+    /// which only bounces the gate process). The machine comes back automatically — no physical access
+    /// needed, unlike <see cref="PowerOffAsync"/>. Fire-and-forget and scheduled out-of-process so this
+    /// process dying mid-call doesn't abort it; callers must flush their HTTP response first.
+    /// </summary>
+    Task RebootAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Sets the NUC's system clock to the given absolute instant. Disables NTP first
     /// (these gates are offline, so timesyncd can't sync and would otherwise fight the
     /// set) then applies the time. The instant is timezone-independent — the device

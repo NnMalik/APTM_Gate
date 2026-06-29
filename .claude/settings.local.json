@@ -116,7 +116,11 @@
       "mcp__visualize__show_widget",
       "Bash(awk '/function updateStats/,/^        }/' src/APTM.Gate.Api/wwwroot/finish-mini.html)",
       "Bash(grep -nB2 \"fun insertHeatCandidate\" app/src/main/java/com/aptm/hht/data/local/dao/RaceDao.kt)",
-      "Bash(./gradlew compileDebugKotlin --console=plain -q)"
+      "Bash(./gradlew compileDebugKotlin --console=plain -q)",
+      "Bash(./gradlew :app:processDebugManifest :app:mergeDebugResources --console=plain -q)",
+      "Bash(grep -rn 'Log.*\\\\$\"' --include=\"*.cs\")",
+      "Bash(grep -rn '\\\\$\".*{' --include=\"*.cs\")",
+      "PowerShell(cd 'C:\\\\Users\\\\DeLL\\\\source\\\\repos\\\\APTM_SN_FE\\\\APTM_V2'; $out = & npx tsc -b 2>$null; $code = $LASTEXITCODE; $errs = $out | Select-String 'error TS'; if \\($errs\\) { $errs | Select-Object -First 30 } else { \"no TS errors\" }; \"EXIT=$code\")"
     ]
   }
 }

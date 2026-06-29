@@ -51,6 +51,13 @@ public sealed class RaceStartTimeDto
     /// finish results per event at end of test.
     /// </summary>
     public int? EventId { get; set; }
+
+    /// <summary>
+    /// The heat's candidate roster. Lets the field app attribute a checkpoint read to a heat by
+    /// membership (drift-free, and works for DNF candidates) instead of by gun-time windows. Empty
+    /// for legacy rows. Additive — existing consumers ignore it.
+    /// </summary>
+    public Guid[] CandidateIds { get; set; } = [];
 }
 
 /// <summary>

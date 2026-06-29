@@ -196,6 +196,64 @@ public static class LifecycleEndpoints
             "(Gate:RestartCommand, default schedules 'systemctl restart aptm-gate' via systemd-run). " +
             "Used after first-time provisioning so the readers/workers register their newly-set role. " +
             "The service comes back automatically in a few seconds; data in Postgres is preserved.");
+
+        // Full OS reboot — the NUC restarts and comes back on its own (unlike power-off, which stays
+        // down). No stranded-data guard: data survives in Postgres and the workers resume on boot
+        // (same rationale as /gate/restart). We DO quiesce by default so reads sitting in the
+        // in-memory ingest queue are flushed before the OS goes down; ?force=true skips that.
+        group.MapPost("/reboot", async (
+            bool? force,
+            IGateStatusProvider statusProvider,
+            IReaderStatusProvider readerStatus,
+            IBufferProcessingService processor,
+            ISystemControlService systemControl,
+            IConfiguration configuration,
+            ILogger<Program> logger,
+            CancellationToken ct) =>
+        {
+            // Per-gate kill switch. Missing or unparseable key = allowed (default on).
+            var allowed = !bool.TryParse(configuration["Gate:AllowRemoteReboot"], out var enabled) || enabled;
+            if (!allowed)
+            {
+                return Results.Json(new
+                {
+                    status = "reboot_disabled",
+                    message = "Remote reboot is disabled on this gate (Gate:AllowRemoteReboot = false)."
+                }, statusCode: 403);
+            }
+
+            // Flush the reader's in-memory queue + drain buffered reads before going down, unless forced.
+            if (force != true)
+                await QuiesceAsync(readerStatus, processor, ct);
+
+            statusProvider.SetActive(false);
+            logger.LogWarning(
+                "Reboot requested via /gate/reboot — the NUC will restart. Its Wi-Fi AP drops for ~1 minute, " +
+                "then the gate comes back automatically.");
+
+            _ = Task.Run(async () =>
+            {
+                try { await readerStatus.DisconnectReaderAsync(CancellationToken.None); }
+                catch { /* best-effort */ }
+
+                await Task.Delay(1000); // let the HTTP 200 reach the tablet before we go down
+                await systemControl.RebootAsync(CancellationToken.None);
+            }, CancellationToken.None);
+
+            return Results.Ok(new
+            {
+                status = "rebooting",
+                message = "The NUC is rebooting. Its Wi-Fi will drop for about a minute and then reconnect — " +
+                          "no need to power it on manually."
+            });
+        })
+        .WithName("RebootGate")
+        .WithSummary("Reboot the NUC (full OS restart)")
+        .WithDescription(
+            "Reboots the NUC at the OS level via the configured command (Gate:RebootCommand, default " +
+            "schedules 'systemctl reboot' via systemd-run). Unlike power-off, the machine comes back on " +
+            "its own. Quiesces the reader/buffer first unless ?force=true. No stranded-data guard — data " +
+            "survives in Postgres and workers resume on boot. Can be disabled via Gate:AllowRemoteReboot.");
     }
 
     /// <summary>

@@ -5,12 +5,28 @@ using APTM.Gate.Core.Interfaces;
 using APTM.Gate.Infrastructure;
 using APTM.Gate.Workers;
 using Microsoft.OpenApi.Models;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Host integration: no-op when not running as the respective service type
 builder.Host.UseWindowsService();
 builder.Host.UseSystemd();
+
+// Logging → console (journald under systemd) + a durable rolling file on the NUC. journald can
+// roll away under its size caps, so a 90-day on-disk log is the source of truth for after-the-fact
+// root-cause and the field app's "Download logs". Lives under the content root's logs/ folder.
+builder.Host.UseSerilog((context, log) => log
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("Npgsql", Serilog.Events.LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File(
+        Path.Combine(AppContext.BaseDirectory, "logs", "aptm-gate-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 90,
+        shared: true));
 
 // Infrastructure: DbContext, services
 builder.Services.AddInfrastructureServices(builder.Configuration);
@@ -99,6 +115,7 @@ app.MapHealthEndpoints();
 app.MapTimeEndpoints();
 app.MapTokenEndpoints();
 app.MapLifecycleEndpoints();
+app.MapSystemEndpoints();
 app.MapBufferEndpoints();
 app.MapHeatEndpoints();
 app.MapRaceDataEndpoints();

@@ -356,6 +356,18 @@ const Display = (() => {
             addFeed('config', 'Configuration updated — reloading...');
             setTimeout(loadDisplayData, 500);
         });
+
+        // Remote display command (field app → /gate/display/reload). A hard page reload recovers a
+        // stuck/blank kiosk without rebooting the NUC; a soft refresh just re-pulls display-data.
+        src.addEventListener('display_command', (e) => {
+            let action = 'reload';
+            try { action = (JSON.parse(e.data).action || 'reload'); } catch (_) {}
+            if (action === 'reload') {
+                setTimeout(() => window.location.reload(), 300);
+            } else {
+                loadDisplayData();
+            }
+        });
     }
 
     // ── Feed ────────────────────────────────────────────────────────────────

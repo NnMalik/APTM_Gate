@@ -84,7 +84,13 @@ public sealed class SyncHubService : ISyncHubService
         // pushes for the same heat_id are silently dropped (unique index on heat_id).
         if (string.Equals(payload.DataType, "heat_completion", StringComparison.OrdinalIgnoreCase))
         {
-            var heatPayload = payload.Payload.Deserialize<HeatCompletionDto>(
+            // Deserialize into the double-typed HeatCompletionPushPayload, NOT the int-typed
+            // HeatCompletionDto: the HHT round-trips the relay payload through a Map<String,Any>, so
+            // Gson emits the counts as JSON doubles (3.0, not 3). System.Text.Json refuses 3.0 → int and
+            // throws — which 500s the push and (because heat_completion is a CRITICAL retry-forever sync
+            // type) leaves the start LED's timer running forever. Same accommodation as RaceStartPayload;
+            // we cast to int when storing.
+            var heatPayload = payload.Payload.Deserialize<HeatCompletionPushPayload>(
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (heatPayload is not null)
             {
@@ -96,13 +102,13 @@ public sealed class SyncHubService : ISyncHubService
                     _db.HeatCompletions.Add(new HeatCompletion
                     {
                         HeatId = heatPayload.HeatId,
-                        HeatNumber = heatPayload.HeatNumber,
-                        ExpectedCount = heatPayload.ExpectedCount,
-                        FinishedCount = heatPayload.FinishedCount,
+                        HeatNumber = (int)heatPayload.HeatNumber,
+                        ExpectedCount = (int)heatPayload.ExpectedCount,
+                        FinishedCount = (int)heatPayload.FinishedCount,
                         LastCandidateId = heatPayload.LastCandidateId,
                         CompletedAt = heatPayload.CompletedAt,
                         ClosureReason = string.IsNullOrWhiteSpace(heatPayload.ClosureReason) ? "auto" : heatPayload.ClosureReason,
-                        SourceDeviceCode = heatPayload.SourceDeviceCode,
+                        SourceDeviceCode = string.IsNullOrWhiteSpace(heatPayload.SourceDeviceCode) ? payload.DeviceCode : heatPayload.SourceDeviceCode,
                         // Authoritative finish-gate heat time carried in the relay. The start display
                         // shows this verbatim so both LEDs freeze on an identical value.
                         DurationSeconds = heatPayload.DurationSeconds,
@@ -451,7 +457,8 @@ public sealed class SyncHubService : ISyncHubService
                 HeatNumber = r.HeatNumber,
                 GunStartTime = r.GunStartTime,
                 SourceDeviceId = r.SourceDeviceId,
-                EventId = r.EventId
+                EventId = r.EventId,
+                CandidateIds = r.CandidateIds
             })
             .ToListAsync(ct);
 
@@ -625,4 +632,20 @@ file sealed class HeatCandidateRemovePayload
     public Guid CandidateId { get; set; }
     public DateTimeOffset RemovedAt { get; set; }
     public string? Reason { get; set; }
+}
+
+// Internal DTO for deserializing the heat_completion relay push. Counts are double (not int) for the
+// same Gson Map<String,Any> reason as RaceStartPayload — the HHT serialises 3 as 3.0, and
+// System.Text.Json throws on 3.0 → int. Cast to int when storing the HeatCompletion entity.
+file sealed class HeatCompletionPushPayload
+{
+    public Guid HeatId { get; set; }
+    public double HeatNumber { get; set; }
+    public double ExpectedCount { get; set; }
+    public double FinishedCount { get; set; }
+    public Guid? LastCandidateId { get; set; }
+    public DateTimeOffset CompletedAt { get; set; }
+    public string? ClosureReason { get; set; }
+    public string? SourceDeviceCode { get; set; }
+    public double? DurationSeconds { get; set; }
 }

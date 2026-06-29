@@ -21,9 +21,14 @@ public sealed class SystemControlService : ISystemControlService
     // abort). Override with Gate:RestartCommand (e.g. on Windows, a Restart-Service invocation).
     private const string DefaultRestartCommand = "systemd-run --on-active=2 --collect systemctl restart aptm-gate";
 
+    // Scheduled out-of-process like the service restart so the reboot survives this process being
+    // torn down by the very reboot it issued. Override with Gate:RebootCommand.
+    private const string DefaultRebootCommand = "systemd-run --on-active=2 --collect systemctl reboot";
+
     private readonly ILogger<SystemControlService> _logger;
     private readonly string _powerOffCommand;
     private readonly string _restartCommand;
+    private readonly string _rebootCommand;
 
     public SystemControlService(IConfiguration configuration, ILogger<SystemControlService> logger)
     {
@@ -37,6 +42,11 @@ public sealed class SystemControlService : ISystemControlService
         _restartCommand = string.IsNullOrWhiteSpace(restart)
             ? DefaultRestartCommand
             : restart.Trim();
+
+        var reboot = configuration["Gate:RebootCommand"];
+        _rebootCommand = string.IsNullOrWhiteSpace(reboot)
+            ? DefaultRebootCommand
+            : reboot.Trim();
     }
 
     public async Task<bool> SetSystemTimeAsync(DateTimeOffset utc, CancellationToken ct = default)
@@ -99,6 +109,13 @@ public sealed class SystemControlService : ISystemControlService
     {
         FireAndForget(_restartCommand,
             "Restarting the gate service via '{Command}'. The service will be back in a few seconds.");
+        return Task.CompletedTask;
+    }
+
+    public Task RebootAsync(CancellationToken ct = default)
+    {
+        FireAndForget(_rebootCommand,
+            "Rebooting the NUC via '{Command}'. The machine will restart and come back on its own in ~1 minute.");
         return Task.CompletedTask;
     }
 
